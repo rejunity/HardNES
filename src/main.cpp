@@ -58,18 +58,12 @@ void load(const char* fileName)
 
     PPU::set_mirroring(mirroring ? PPU::VERTICAL : PPU::HORIZONTAL);
 
-    // switch (mapperNum)
-    // {
-    //     case 0:  mapper = new Mapper0(rom); break;
-    //     case 1:  mapper = new Mapper1(rom); break;
-    //     case 2:  mapper = new Mapper2(rom); break;
-    //     case 3:  mapper = new Mapper3(rom); break;
-    //     case 4:  mapper = new Mapper4(rom); break;
-    //     default:
-    //         fprintf(stderr, "%s: mapper %d not supported\n", fileName, mapperNum);
-    //         return;
-    // }
-    //free(rom);
+    if (mapperType != 0)
+    {
+        fprintf(stderr, "%s: mapper %d not supported\n", fileName, mapperType);
+        exit(0);
+    }
+
 }
 
 // /* PRG mapping functions */
@@ -312,11 +306,12 @@ int main(int argc, char** argv)
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    // run for 9 ticks (7 ticks reset sequence, plus 2 ticks for LDA #$33)
-    //for (int i = 0; i < 9; i++)
+    free(rom);
+    free(ram);
+    free(prgRam);
 
-    // the A register should now be 0x33:
-    printf("A: %02X\n", m6502_a(&cpu));
+    printf("A:%02X X:%02X Y:%02X S:%02X P:%02X PC:%04X\n",
+           m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu), m6502_pc(&cpu));
 
     return 0;
 }
