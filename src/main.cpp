@@ -16,7 +16,7 @@ uint8_t* prg;
 uint8_t* prgRam;
 uint8_t* chr;
 
-/* Load the ROM from a file. */
+// Load the ROM from a file
 void load(const char* fileName)
 {
     printf("Loading ROM: %s!\n", fileName);
@@ -63,61 +63,17 @@ void load(const char* fileName)
         fprintf(stderr, "%s: mapper %d not supported\n", fileName, mapperType);
         exit(0);
     }
-
 }
 
-// /* PRG mapping functions */
-// template <int pageKBs> void Mapper::map_prg(int slot, int bank)
-// {
-//     if (bank < 0)
-//         bank = (prgSize / (0x400*pageKBs)) + bank;
-
-//     for (int i = 0; i < (pageKBs/8); i++)
-//         prgMap[(pageKBs/8) * slot + i] = (pageKBs*0x400*bank + 0x2000*i) % prgSize;
-// }
-
-// /* CHR mapping functions */
-// template <int pageKBs> void Mapper::map_chr(int slot, int bank)
-// {
-//     for (int i = 0; i < pageKBs; i++)
-//         chrMap[pageKBs*slot + i] = (pageKBs*0x400*bank + 0x400*i) % chrSize;
-// }
-
-// /* Access to memory */
-// u8 Mapper::read(u16 addr)
-// {
-//     if (addr >= 0x8000)
-//         return prg[prgMap[(addr - 0x8000) / 0x2000] + ((addr - 0x8000) % 0x2000)];
-//     else
-//         return prgRam[addr - 0x6000];
-// }
-
-// u8 Mapper::chr_read(u16 addr)
-// {
-//     return chr[chrMap[addr / 0x400] + (addr % 0x400)];
-// }
-
-// /* Access to memory */
+// Access to memory
 u8 read(u16 addr)
 {
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  return ram[addr % 0x800];                              // RAM.
-        case 0x2000 ... 0x3FFF:  return PPU::access<false>(addr % 8, 0);                // PPU.
-
-        // // APU:
-        // case 0x4000 ... 0x4013:
-        // case            0x4015:          return APU::access<wr>(elapsed(), addr, v);
-        // case            0x4017:  if (wr) return APU::access<wr>(elapsed(), addr, v);
-        //                          else return Joypad::read_state(1);                  // Joypad 1.
-
-        // case            0x4014:  if (wr) dma_oam(v); break;                          // OAM DMA.
-        // case            0x4016:  if (wr) { Joypad::write_strobe(v & 1); break; }     // Joypad strobe.
-        //                          else return Joypad::read_state(0);                  // Joypad 0.
-        
-        //case 0x4018 ... 0x7FFF:  return Cartridge::access<wr>(addr, v);               // Cartridge.
-        case 0x6000 ... 0x7FFF:  return prgRam[addr - 0x6000];                          // NROM-256 cartridge.
-        case 0x8000 ... 0xFFFF:  return prg[addr - 0x8000];                             // NROM-256 cartridge.
+        case 0x0000 ... 0x1FFF:  return ram[addr % 0x800];                              // RAM
+        case 0x2000 ... 0x3FFF:  return PPU::access<false>(addr % 8, 0);                // PPU
+        case 0x6000 ... 0x7FFF:  return prgRam[addr - 0x6000];                          // NROM-256 cartridge
+        case 0x8000 ... 0xFFFF:  return prg[addr - 0x8000];                             // NROM-256 cartridge
     }
     return 0;
 }
@@ -127,20 +83,20 @@ void write(u16 addr, u8 v)
 {    
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  ram[addr % 0x800] = v;          break;                 // RAM.
-        case 0x2000 ... 0x3FFF:  PPU::access<true>(addr % 8, v); break;                 // PPU.
-        case            0x4014:  dma_oam(v);                     break;                 // OAM DMA.
-        case 0x6000 ... 0x7FFF:  prgRam[addr - 0x6000] = v;      break;                 // NROM-256 cartridge.
-        case 0x8000 ... 0xFFFF:  prg[addr - 0x8000] = v;         break;                 // NROM-256 cartridge.
+        case 0x0000 ... 0x1FFF:  ram[addr % 0x800] = v;          break;                 // RAM
+        case 0x2000 ... 0x3FFF:  PPU::access<true>(addr % 8, v); break;                 // PPU
+        case            0x4014:  dma_oam(v);                     break;                 // OAM DMA
+        case 0x6000 ... 0x7FFF:  prgRam[addr - 0x6000] = v;      break;                 // NROM-256 cartridge
+        case 0x8000 ... 0xFFFF:  prg[addr - 0x8000] = v;         break;                 // NROM-256 cartridge
     }
 }
 
-size_t longOp = 0;
+size_t dmaCycles = 0;
 void dma_oam(u8 bank)
 {
     for (int i = 0; i < 256; i++)
         write(0x2014, read(bank*0x100 + i));
-    longOp = 256 * 2;
+    dmaCycles = 256 * 2;
 }
 
 u8 chr_read(u16 addr)
@@ -152,32 +108,15 @@ void chr_write(u16 addr, u8 v) {}
 void cpu_set_nmi() { cpuPins |= M6502_NMI; }
 void signal_scanline() {}
 
-void tick(m6502_t& cpu, u8* mem, size_t cycle)
-{
-    cpuPins = m6502_tick(&cpu, cpuPins);
-    const uint16_t addr = M6502_GET_ADDR(cpuPins);
-    if (cpuPins & M6502_RW)
-    {
-        printf("T: %lu, addr:%04X => %02X\n", cycle, addr, mem[addr]);
-        M6502_SET_DATA(cpuPins, mem[addr]);
-    }
-    else
-    {
-        printf("CPU t: %lu, addr:%04X <= %02X\n", cycle, addr, M6502_GET_DATA(cpuPins));
-        mem[addr] = M6502_GET_DATA(cpuPins);
-    }
-}
-
 void tick(m6502_t& cpu, size_t cycle)
 {
     u16 pc = m6502_pc(&cpu);
     u8 opcode = read(pc);
-    //bool fetch = cpuPins & M6502_SYNC;
 
     cpuPins = m6502_tick(&cpu, cpuPins);
     const uint16_t addr = M6502_GET_ADDR(cpuPins);
     if (cpuPins & M6502_RW)
-    {
+    { // read
         u8 v = read(addr);
         LOG("CPU t: %lu, op:%02X@%04X, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X => %02X\n", cycle, opcode, pc,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
@@ -185,7 +124,7 @@ void tick(m6502_t& cpu, size_t cycle)
         M6502_SET_DATA(cpuPins, v);
     }
     else
-    {
+    { // write
         LOG("CPU t: %lu, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X <= %02X\n", cycle,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
             addr, M6502_GET_DATA(cpuPins));
@@ -219,12 +158,6 @@ int main(int argc, char** argv)
     cpuPins = m6502_init(&cpu, &desc);
     PPU::reset();
 
-    // // 64 KB zero-initialized memory
-    // uint8_t mem[(1<<16)] = { };
-    // // put an LDA #$33 instruction at address 0
-    // mem[0] = 0xA9;
-    // mem[1] = 0x33;
-
     ram = (uint8_t*)malloc(0x800);
     memset(ram, 0xFF, 0x800);
     m6502_set_a(&cpu, 0x00);
@@ -232,14 +165,6 @@ int main(int argc, char** argv)
     m6502_set_y(&cpu, 0x00);
     m6502_set_s(&cpu, 0x00);
     m6502_set_p(&cpu, 0x04);
-    
-    // run 7 ticks reset sequence
-    // for (size_t i = 0; i < 7; i++)
-    //    tick(cpu, i);
-
-    // put an LDA #$33 instruction at address 0
-    // ram[0] = 0xA9;
-    // ram[1] = 0x33;
 
     // Initialize graphics system
     const int WIDTH  = 256;
@@ -263,7 +188,7 @@ int main(int argc, char** argv)
     while (!quit)
     {
         frameStart = SDL_GetTicks();
-        //printf("frame start: %ul\n", frameStart);
+        LOG("frame start: %ul\n", frameStart);
 
         // Handle events:
         SDL_Event e;
@@ -281,8 +206,8 @@ int main(int argc, char** argv)
             PPU::step();
             tick(cpu, i);
             
-            i += longOp;
-            longOp = 0;
+            i += dmaCycles;
+            dmaCycles = 0;
         }
 
         SDL_RenderClear(renderer);
@@ -299,8 +224,6 @@ int main(int argc, char** argv)
             PPU::get_pixels()[0], PPU::get_pixels()[1], PPU::get_pixels()[3], PPU::get_pixels()[4],
             PPU::get_pixels()[5], PPU::get_pixels()[6], PPU::get_pixels()[7], PPU::get_pixels()[8],
             PPU::get_pixels()[9], PPU::get_pixels()[10], PPU::get_pixels()[11], PPU::get_pixels()[12]);
-
-        //quit = true;
     }
 
     SDL_DestroyWindow(window);

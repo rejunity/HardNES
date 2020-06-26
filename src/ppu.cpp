@@ -1,6 +1,3 @@
-// #include "cartridge.hpp"
-// #include "cpu.hpp"
-// #include "gui.hpp"
 #include "ppu.hpp"
 #include <cstring>
 #include <stdio.h>
@@ -64,9 +61,8 @@ u8 rd(u16 addr)
 {
     switch (addr)
     {
-        // @ORIG: case 0x0000 ... 0x1FFF:  return Cartridge::chr_access<0>(addr);  // CHR-ROM/RAM.
-        case 0x0000 ... 0x1FFF:  return chr_read(addr);                  // CHR-ROM/RAM.
-        case 0x2000 ... 0x3EFF:  return ciRam[nt_mirror(addr)];          // Nametables.
+        case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
+        case 0x2000 ... 0x3EFF:  return ciRam[nt_mirror(addr)];             // Nametables
         case 0x3F00 ... 0x3FFF:  // Palettes:
             if ((addr & 0x13) == 0x10) addr &= ~0x10;
             return cgRam[addr & 0x1F] & (mask.gray ? 0x30 : 0xFF);
@@ -77,9 +73,8 @@ void wr(u16 addr, u8 v)
 {
     switch (addr)
     {
-        // @ORIG: case 0x0000 ... 0x1FFF:  Cartridge::chr_access<1>(addr, v); break;  // CHR-ROM/RAM.
-        case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM.
-        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;         // Nametables.
+        case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
+        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;         // Nametables
         case 0x3F00 ... 0x3FFF:  // Palettes:
             if ((addr & 0x13) == 0x10) addr &= ~0x10;
             cgRam[addr & 0x1F] = v; break;
@@ -115,19 +110,19 @@ template <bool write> u8 access(u16 index, u8 v)
 
         switch (index)
         {
-            case 0:  ctrl.r = v; tAddr.nt = ctrl.nt; break;       // PPUCTRL   ($2000).
-            case 1:  mask.r = v; break;                           // PPUMASK   ($2001).
-            case 3:  oamAddr = v; break;                          // OAMADDR   ($2003).
-            case 4:  oamMem[oamAddr++] = v; break;                // OAMDATA   ($2004).
-            case 5:                                               // PPUSCROLL ($2005).
-                if (!latch) { fX = v & 7; tAddr.cX = v >> 3; }      // First write.
-                else  { tAddr.fY = v & 7; tAddr.cY = v >> 3; }      // Second write.
+            case 0:  ctrl.r = v; tAddr.nt = ctrl.nt; break;                 // PPUCTRL   ($2000)
+            case 1:  mask.r = v; break;                                     // PPUMASK   ($2001)
+            case 3:  oamAddr = v; break;                                    // OAMADDR   ($2003)
+            case 4:  oamMem[oamAddr++] = v; break;                          // OAMDATA   ($2004)
+            case 5:                                                         // PPUSCROLL ($2005)
+                if (!latch) { fX = v & 7; tAddr.cX = v >> 3; }              // First write
+                else  { tAddr.fY = v & 7; tAddr.cY = v >> 3; }              // Second write
                 latch = !latch; break;
-            case 6:                                               // PPUADDR   ($2006).
-                if (!latch) { tAddr.h = v & 0x3F; }                 // First write.
-                else        { tAddr.l = v; vAddr.r = tAddr.r; }     // Second write.
+            case 6:                                                         // PPUADDR   ($2006)
+                if (!latch) { tAddr.h = v & 0x3F; }                         // First write
+                else        { tAddr.l = v; vAddr.r = tAddr.r; }             // Second write
                 latch = !latch; break;
-            case 7:  wr(vAddr.addr, v); vAddr.addr += ctrl.incr ? 32 : 1;  // PPUDATA ($2007).
+            case 7:  wr(vAddr.addr, v); vAddr.addr += ctrl.incr ? 32 : 1;   // PPUDATA ($2007)
         }
     }
     /* Read from register */
