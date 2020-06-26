@@ -298,11 +298,7 @@ template<Scanline s> void scanline_cycle()
     static u16 addr;
 
     if (s == NMI and dot == 1)
-    {
-        status.vBlank = true; // @ORIG: if (ctrl.nmi) cpu_set_nmi(); }
-        if (ctrl.nmi) cpu_set_nmi();
-    } 
-    // @ORIG: else if (s == POST and dot == 0) GUI::new_frame(pixels);
+        status.vBlank = true;
     else if (s == VISIBLE or s == PRE)
     {
         // Sprites:
@@ -345,12 +341,11 @@ template<Scanline s> void scanline_cycle()
             case           340:  nt = rd(addr); if (s == PRE && rendering() && frameOdd) dot++;
         }
         // Signal scanline to mapper:
-        // if (dot == 260 && rendering()) Cartridge::signal_scanline();
         if (dot == 260 && rendering()) signal_scanline();
     }
 
-//    if (status.vBlank && ctrl.nmi)
-//        cpu_set_nmi();
+    if (status.vBlank && ctrl.nmi)
+        cpu_set_nmi();
 }
 
 /* Execute a PPU cycle. */
@@ -390,6 +385,5 @@ u32* get_pixels()
 {
     return pixels;
 }
-
 
 }
