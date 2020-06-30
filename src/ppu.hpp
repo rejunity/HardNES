@@ -5,6 +5,48 @@ typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 
+// PPU pin out
+//              .--\/--.
+//       R/W -> |01  40| -- +5
+//    CPU D0 <> |02  39| -> ALE
+//    CPU D1 <> |03  38| <> PPU AD0
+//    CPU D2 <> |04  37| <> PPU AD1
+//    CPU D3 <> |05  36| <> PPU AD2
+//    CPU D4 <> |06  35| <> PPU AD3
+//    CPU D5 <> |07  34| <> PPU AD4
+//    CPU D6 <> |08  33| <> PPU AD5
+//    CPU D7 <> |09  32| <> PPU AD6
+//    CPU A2 -> |10  31| <> PPU AD7
+//    CPU A1 -> |11  30| -> PPU A8
+//    CPU A0 -> |12  29| -> PPU A9
+//       /CS -> |13  28| -> PPU A10
+//      EXT0 <> |14  27| -> PPU A11
+//      EXT1 <> |15  26| -> PPU A12
+//      EXT2 <> |16  25| -> PPU A13
+//      EXT3 <> |17  24| -> /RD
+//       CLK -> |18  23| -> /WR
+//      /INT <- |19  22| <- /RST
+//       GND -- |20  21| -> VOUT
+//              `------'
+//
+
+struct ppu_pins_t
+{
+    unsigned rw : 1;
+    unsigned d : 8;
+    unsigned a : 3;
+    unsigned cs : 1;
+    unsigned ext : 4;
+    unsigned irq : 1;
+    unsigned ale : 1;
+    unsigned ad : 8;
+    unsigned pa : 16;// @TODO: should be actualy 6;
+    unsigned rd : 1;
+    unsigned wr : 1;
+    unsigned rst : 1;
+    u32 video;
+};
+
 namespace PPU {
 
 enum Scanline  { VISIBLE, POST, NMI, PRE };
@@ -87,10 +129,56 @@ union Addr
     unsigned r : 15;
 };
 
-template <bool write> u8 access(u16 index, u8 v = 0);
-void set_mirroring(Mirroring mode);
-void step();
-void reset();
-u32* get_pixels();
+//template <bool write> u8 access(u16 index, u8 v = 0);
+//void set_mirroring(Mirroring mode);
+//void step();
+//void reset();
+//u32* get_pixels();
 
 }
+
+//u8 ciRam[0x800];           // VRAM for nametables.
+//u16 nt_mirror(u16 addr)
+//{
+//    switch (mirroring)
+//    {
+//        case VERTICAL:    return addr % 0x800;
+//        case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
+//        default:          return addr - 0x2000;
+//    }
+//}
+//PPU::Mirroring mirroring;       // Mirroring mode.
+//u32 pixels[256 * 240];     // Video buffer.
+
+struct ppu_t
+{
+    u8 cgRam[0x20];                 // VRAM for palettes
+    u8 oamMem[0x100];               // VRAM for sprite properties
+    PPU::Sprite oam[8], secOam[8];  // Sprite buffers
+
+    PPU::Addr vAddr, tAddr;         // Loopy V, T
+    u8 fX;                          // Fine X
+    u8 oamAddr;                     // OAM address
+
+    PPU::Ctrl ctrl;                 // PPUCTRL   ($2000) register
+    PPU::Mask mask;                 // PPUMASK   ($2001) register
+    PPU::Status status;             // PPUSTATUS ($2002) register
+
+    // Background latches:
+    u8 nt, at, bgL, bgH;
+    // Background shift registers:
+    u8 atShiftL, atShiftH; u16 bgShiftL, bgShiftH;
+    bool atLatchL, atLatchH;
+
+    // Rendering counters:
+    int scanline, dot;
+    bool frameOdd;
+};
+// /* initialize a new PPU instance and return initial pin mask */
+//uint64_t ppu_init(ppu_t* ppu);
+// /* execute one tick */
+//uint64_t ppu_tick(ppu_t* cpu, uint64_t pins);
+
+ppu_pins_t ppu_init(ppu_t* ppu);
+ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins);
+u32* ppu_pixels();

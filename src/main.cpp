@@ -10,11 +10,14 @@ void logNull(...) {}
 //#define LOG printf
 
 uint64_t cpuPins;
+ppu_pins_t ppuPins;
 uint8_t* ram;
 uint8_t* rom;
 uint8_t* prg;
 uint8_t* prgRam;
 uint8_t* chr;
+uint8_t* ciRam;
+PPU::Mirroring ciRamMirroring;
 
 // Load the ROM from a file
 void load(const char* fileName)
@@ -56,7 +59,7 @@ void load(const char* fileName)
     printf("ROM PRG:%lu, CHR:%lu, mapper:%d, mirroring: %s\n", prgSize, chrSize, mapperType, mirroring ? "|" : "--");
     printf("RAM PRG:%lu, CHR:%lu\n", prgRamSize, 0LU);
 
-    PPU::set_mirroring(mirroring ? PPU::VERTICAL : PPU::HORIZONTAL);
+    ciRamMirroring = mirroring ? PPU::VERTICAL : PPU::HORIZONTAL;
 
     if (mapperType != 0)
     {
@@ -65,73 +68,130 @@ void load(const char* fileName)
     }
 }
 
-// Access to memory
-u8 read(u16 addr)
+/* Get CIRAM address according to mirroring */
+u16 nt_mirror(u16 addr)
 {
+    switch (ciRamMirroring)
+    {
+        case PPU::VERTICAL:     return addr % 0x800;
+        case PPU::HORIZONTAL:   return ((addr / 2) & 0x400) + (addr % 0x400);
+        default:                return addr - 0x2000;
+    }
+}
+
+// Access to memory
+void cpu_read(u16 addr)
+{
+    ppuPins.cs = false;
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  return ram[addr % 0x800];                              // RAM
-        case 0x2000 ... 0x3FFF:  return PPU::access<false>(addr % 8, 0);                // PPU
-        case 0x6000 ... 0x7FFF:  return prgRam[addr - 0x6000];                          // NROM-256 cartridge
-        case 0x8000 ... 0xFFFF:  return prg[addr - 0x8000];                             // NROM-256 cartridge
+        case 0x0000 ... 0x1FFF:  M6502_SET_DATA(cpuPins, ram[addr % 0x800]); break;                     // RAM
+        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.rw = true; ppuPins.a = addr % 8;  break;    // PPU
+        case 0x6000 ... 0x7FFF:  M6502_SET_DATA(cpuPins, prgRam[addr - 0x6000]); break;                 // NROM-256 cartridge
+        case 0x8000 ... 0xFFFF:  M6502_SET_DATA(cpuPins, prg[addr - 0x8000]); break;                    // NROM-256 cartridge
     }
-    return 0;
 }
 
 void dma_oam(u8 bank);
-void write(u16 addr, u8 v)
-{    
+void cpu_write(u16 addr)
+{
+    ppuPins.cs = false;
+    u8 v =  M6502_GET_DATA(cpuPins);
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  ram[addr % 0x800] = v;          break;                 // RAM
-        case 0x2000 ... 0x3FFF:  PPU::access<true>(addr % 8, v); break;                 // PPU
-        case            0x4014:  dma_oam(v);                     break;                 // OAM DMA
-        case 0x6000 ... 0x7FFF:  prgRam[addr - 0x6000] = v;      break;                 // NROM-256 cartridge
-        case 0x8000 ... 0xFFFF:  prg[addr - 0x8000] = v;         break;                 // NROM-256 cartridge
+        case 0x0000 ... 0x1FFF:  ram[addr % 0x800] = v;          break;                         // RAM
+        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.rw = false;
+                                 ppuPins.a = addr % 8; ppuPins.d = v; break;                    // PPU
+        case            0x4014:  dma_oam(v);                     break;                         // OAM DMA
+        case 0x6000 ... 0x7FFF:  prgRam[addr - 0x6000] = v;      break;                         // NROM-256 cartridge
+        case 0x8000 ... 0xFFFF:  prg[addr - 0x8000] = v;         break;                         // NROM-256 cartridge
     }
 }
 
-size_t dmaCycles = 0;
+void ppu_read(u16 addr)
+{
+    switch (addr)
+    {
+        case 0x0000 ... 0x1FFF:  ppuPins.ad = chr[addr % 0x2000]; break;                        // CHR-ROM/RAM
+        case 0x2000 ... 0x3EFF:  ppuPins.ad = ciRam[nt_mirror(addr)]; break;                    // Nametables
+    }
+}
+
+void ppu_write(u16 addr)
+{
+    u8 v = ppuPins.ad;
+    switch (addr)
+    {
+        case 0x0000 ... 0x1FFF:  chr[addr % 0x2000] = v; break;                                 // CHR-ROM/RAM
+        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;                             // Nametables
+    }
+}
+
+u16 dmaAddr;
+size_t dmaCounter;
 void dma_oam(u8 bank)
 {
-    for (int i = 0; i < 256; i++)
-        write(0x2014, read(bank*0x100 + i));
-    dmaCycles = 256 * 2;
+    dmaAddr = bank*0x100;
+    dmaCounter = 256 * 2;
 }
 
-u8 chr_read(u16 addr)
-{
-    return chr[addr % 0x2000];
-}
+//u8 chr_read(u16 addr)
+//{
+//    return chr[addr % 0x2000];
+//}
+//void chr_write(u16 addr, u8 v) {}
+//u8 ci_read(u16 addr)
+//{
+//    return ciRam[nt_mirror(addr)];
+//}
+//void ci_write(u16 addr, u8 v)
+//{
+//    ciRam[nt_mirror(addr)] = v;
+//}
 
-void chr_write(u16 addr, u8 v) {}
-void cpu_set_nmi() { cpuPins |= M6502_NMI; }
-void signal_scanline() {}
+//void cpu_set_nmi() { cpuPins |= M6502_NMI; }
+//void signal_scanline() {}
 
 void tick(m6502_t& cpu, size_t cycle)
 {
     u16 pc = m6502_pc(&cpu);
-    u8 opcode = read(pc);
+    u8 opcode = prg[pc - 0x8000];
 
     cpuPins = m6502_tick(&cpu, cpuPins);
     const uint16_t addr = M6502_GET_ADDR(cpuPins);
     if (cpuPins & M6502_RW)
     { // read
-        u8 v = read(addr);
+        cpu_read(addr);
         LOG("CPU t: %lu, op:%02X@%04X, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X => %02X\n", cycle, opcode, pc,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
-            addr, v);
-        M6502_SET_DATA(cpuPins, v);
+            addr, M6502_GET_DATA(cpuPins));
     }
     else
     { // write
         LOG("CPU t: %lu, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X <= %02X\n", cycle,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
             addr, M6502_GET_DATA(cpuPins));
-        write(addr, M6502_GET_DATA(cpuPins));
+        cpu_write(addr);
     }
+}
 
-    cpuPins &= ~M6502_NMI;
+void tick(ppu_t& ppu, size_t cycle)
+{
+    ppuPins = ppu_tick(&ppu, ppuPins);
+    if (ppuPins.rd)
+    { // read
+        //ppu_read((ppuPins.pa << 8) + ppuPins.ad);
+        ppu_read(ppuPins.pa);
+    }
+    else if (ppuPins.wr)
+    { // write
+        //static u8 latch = 0;
+        //if (ppuPins.ale)
+        //    latch = ppuPins.ad;
+        //else
+        //    ppu_write((ppuPins.pa << 8) + latch, ppuPins.ad);
+        ppu_write(ppuPins.pa);
+    }
 }
 
 // Super Mario Bros. PRG
@@ -156,7 +216,9 @@ int main(int argc, char** argv)
     m6502_t cpu;
     m6502_desc_t desc;
     cpuPins = m6502_init(&cpu, &desc);
-    PPU::reset();
+
+    ppu_t ppu;
+    ppuPins = ppu_init(&ppu);
 
     ram = (uint8_t*)malloc(0x800);
     memset(ram, 0xFF, 0x800);
@@ -165,6 +227,9 @@ int main(int argc, char** argv)
     m6502_set_y(&cpu, 0x00);
     m6502_set_s(&cpu, 0x00);
     m6502_set_p(&cpu, 0x04);
+
+    ciRam = (uint8_t*)malloc(0x800);
+    memset(ciRam, 0xFF, 0x800);
 
     // Initialize graphics system
     const int WIDTH  = 256;
@@ -201,17 +266,28 @@ int main(int argc, char** argv)
         const size_t TOTAL_CYCLES = 29781;
         for (size_t i = 0; i < TOTAL_CYCLES; i++)
         {
-            PPU::step();
-            PPU::step();
-            PPU::step();
-            tick(cpu, i);
-            
-            i += dmaCycles;
-            dmaCycles = 0;
+            bool cs = ppuPins.cs; ppuPins.cs = false;
+            tick(ppu, i);
+            tick(ppu, i); ppuPins.cs = cs; // quick&dirty way to simulate M2 for now, should be handled by LS139
+            tick(ppu, i);
+            if (ppuPins.irq) cpuPins |= M6502_NMI; else cpuPins &= ~M6502_NMI;
+            if (ppuPins.cs && ppuPins.rw) // should be handled by LS139 https://wiki.nesdev.com/w/index.php/74139
+                M6502_SET_DATA(cpuPins, ppuPins.d);
+            ppuPins.cs = false;
+            if (dmaCounter > 0)
+            {
+                if (dmaCounter % 2 == 0)
+                    cpu_read(dmaAddr++);
+                else
+                    cpu_write(0x2014);
+                dmaCounter--;
+            }
+            else
+                tick(cpu, i);
         }
 
         SDL_RenderClear(renderer);
-        SDL_UpdateTexture(canvas, NULL, PPU::get_pixels(), WIDTH * sizeof(u32));
+        SDL_UpdateTexture(canvas, NULL, ppu_pixels(), WIDTH * sizeof(u32));
         SDL_RenderCopy(renderer, canvas, NULL, NULL);
         SDL_RenderPresent(renderer);
 
@@ -221,9 +297,9 @@ int main(int argc, char** argv)
             SDL_Delay((int)(DELAY - frameTime));
 
         LOG("frame time: %ul, pixels: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", frameTime,
-            PPU::get_pixels()[0], PPU::get_pixels()[1], PPU::get_pixels()[3], PPU::get_pixels()[4],
-            PPU::get_pixels()[5], PPU::get_pixels()[6], PPU::get_pixels()[7], PPU::get_pixels()[8],
-            PPU::get_pixels()[9], PPU::get_pixels()[10], PPU::get_pixels()[11], PPU::get_pixels()[12]);
+            ppu_pixels()[0], ppu_pixels()[1],  ppu_pixels()[3],  ppu_pixels()[4],
+            ppu_pixels()[5], ppu_pixels()[6],  ppu_pixels()[7],  ppu_pixels()[8],
+            ppu_pixels()[9], ppu_pixels()[10], ppu_pixels()[11], ppu_pixels()[12]);
     }
 
     SDL_DestroyWindow(window);

@@ -5,31 +5,33 @@
 extern void logNull(...);
 #define LOG logNull
 //#define LOG printf
+//#define ERR logNull
+#define ERR printf
 
 #define NTH_BIT(x, n) (((x) >> (n)) & 1)
 
-extern u8 chr_read(u16 addr);
-extern void chr_write(u16 addr, u8 v);
-extern void cpu_set_nmi();
-extern void signal_scanline();
+//extern u8 chr_read(u16 addr);
+//extern void chr_write(u16 addr, u8 v);
+//extern u8 ci_read(u16 addr);
+//extern void ci_write(u16 addr, u8 v);
+//extern void cpu_set_nmi();
+//extern void signal_scanline();
 
 namespace PPU {
 #include "palette.inc"
 
-Mirroring mirroring;       // Mirroring mode.
-u8 ciRam[0x800];           // VRAM for nametables.
-u8 cgRam[0x20];            // VRAM for palettes.
-u8 oamMem[0x100];          // VRAM for sprite properties.
-Sprite oam[8], secOam[8];  // Sprite buffers.
-u32 pixels[256 * 240];     // Video buffer.
+u8 cgRam[0x20];             // VRAM for palettes
+u8 oamMem[0x100];           // VRAM for sprite properties
+Sprite oam[8], secOam[8];   // Sprite buffers
+u32 pixels[256 * 240];      // Video buffer
 
-Addr vAddr, tAddr;  // Loopy V, T.
-u8 fX;              // Fine X.
-u8 oamAddr;         // OAM address.
+Addr vAddr, tAddr;          // Loopy V, T
+u8 fX;                      // Fine X
+u8 oamAddr;                 // OAM address
 
-Ctrl ctrl;      // PPUCTRL   ($2000) register.
-Mask mask;      // PPUMASK   ($2001) register.
-Status status;  // PPUSTATUS ($2002) register.
+Ctrl ctrl;                  // PPUCTRL   ($2000) register
+Mask mask;                  // PPUMASK   ($2001) register
+Status status;              // PPUSTATUS ($2002) register
 
 // Background latches:
 u8 nt, at, bgL, bgH;
@@ -40,44 +42,77 @@ bool atLatchL, atLatchH;
 // Rendering counters:
 int scanline, dot;
 bool frameOdd;
+u16 busAddr;
+u8 busData;
+bool busRead;
+bool busWrite;
+u32 video;
+bool nmi;
 
 inline bool rendering() { return mask.bg || mask.spr; }
 inline int spr_height() { return ctrl.sprSz ? 16 : 8; }
 
 /* Get CIRAM address according to mirroring */
-u16 nt_mirror(u16 addr)
-{
-    switch (mirroring)
-    {
-        case VERTICAL:    return addr % 0x800;
-        case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
-        default:          return addr - 0x2000;
-    }
-}
-void set_mirroring(Mirroring mode) { mirroring = mode; }
+//u16 nt_mirror(u16 addr)
+//{
+//    switch (mirroring)
+//    {
+//        case VERTICAL:    return addr % 0x800;
+//        case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
+//        default:          return addr - 0x2000;
+//    }
+//}
+//void set_mirroring(Mirroring mode) { mirroring = mode; }
 
 /* Access PPU memory */
+u8 rdPalette(u8 index)
+{
+    if ((index & 0x13) == 0x10) index &= ~0x10;
+    return cgRam[index & 0x1F] & (mask.gray ? 0x30 : 0xFF);
+}
 u8 rd(u16 addr)
 {
+    if (busRead || busWrite)
+        ERR("PPU bus read collision @(%dx%d), newaddr:%04X, oldadrr:%04X read:%d write:%d\n", scanline, dot, addr, busAddr, (int)busRead, (int)busWrite);
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
-        case 0x2000 ... 0x3EFF:  return ciRam[nt_mirror(addr)];             // Nametables
+        //case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
+        //case 0x2000 ... 0x3EFF:  return ciRam[nt_mirror(addr)];             // Nametables
+        //case 0x3F00 ... 0x3FFF:  // Palettes:
+        //    if ((addr & 0x13) == 0x10) addr &= ~0x10;
+        //    return cgRam[addr & 0x1F] & (mask.gray ? 0x30 : 0xFF);
         case 0x3F00 ... 0x3FFF:  // Palettes:
-            if ((addr & 0x13) == 0x10) addr &= ~0x10;
-            return cgRam[addr & 0x1F] & (mask.gray ? 0x30 : 0xFF);
-        default: return 0;
+            return rdPalette(addr & 0xFF);
+//        case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
+//        case 0x2000 ... 0x3EFF:  return ci_read(addr);             // Nametables
+        default:
+            busAddr = addr;
+            busRead = true;
+            busWrite = false;
+            return busData; // NOTE: returns stale data from the last cycle!
     }
 }
 void wr(u16 addr, u8 v)
 {
+    if (busRead || busWrite)
+        ERR("PPU bus write collision @(%dx%d), value: %02X newaddr:%04X, oldadrr:%04X read:%d write:%d\n", scanline, dot, v, addr, busAddr, (int)busRead, (int)busWrite);
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
-        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;         // Nametables
+        //case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
+        //case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;         // Nametables
         case 0x3F00 ... 0x3FFF:  // Palettes:
             if ((addr & 0x13) == 0x10) addr &= ~0x10;
-            cgRam[addr & 0x1F] = v; break;
+            cgRam[addr & 0x1F] = v;
+            break;
+
+//        case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
+//        case 0x2000 ... 0x3EFF:  ci_write(addr, v); break;         // Nametables
+
+        default:
+            busAddr = addr;
+            busData = v;
+            busWrite = true;
+            busRead = false;
     }
 }
 
@@ -123,6 +158,7 @@ template <bool write> u8 access(u16 index, u8 v)
                 else        { tAddr.l = v; vAddr.r = tAddr.r; }             // Second write
                 latch = !latch; break;
             case 7:  wr(vAddr.addr, v); vAddr.addr += ctrl.incr ? 32 : 1;   // PPUDATA ($2007)
+                break;
         }
     }
     /* Read from register */
@@ -131,17 +167,15 @@ template <bool write> u8 access(u16 index, u8 v)
         switch (index)
         {
             // PPUSTATUS ($2002):
-            case 2:  res = (res & 0x1F) | status.r; status.vBlank = 0; latch = 0; break;
-            case 4:  res = oamMem[oamAddr]; break;  // OAMDATA ($2004).
+            case 2: res = (res & 0x1F) | status.r; status.vBlank = 0; latch = 0; break;
+            case 4: res = oamMem[oamAddr]; break;   // OAMDATA ($2004).
             case 7:                                 // PPUDATA ($2007).
-                if (vAddr.addr <= 0x3EFF)
-                {
                     res = buffer;
                     buffer = rd(vAddr.addr);
-                }
-                else
-                    res = buffer = rd(vAddr.addr);
-                vAddr.addr += ctrl.incr ? 32 : 1;
+//                    if (vAddr.addr >= 0x3F00)
+                        res = buffer;
+                    vAddr.addr += ctrl.incr ? 32 : 1;
+                    break;
         }
 
         LOG("PPU %s => %02X\n", registerName, res);
@@ -244,6 +278,24 @@ void load_sprites()
     }
 }
 
+/* Load the sprite info into primary OAM and fetch their tile data. */
+u16 sprite_addr(int i)
+{
+    // Different address modes depending on the sprite height:
+    u16 addr;
+    if (spr_height() == 16)
+        addr = ((oam[i].tile & 1) * 0x1000) + ((oam[i].tile & ~1) * 16);
+    else
+        addr = ( ctrl.sprTbl      * 0x1000) + ( oam[i].tile       * 16);
+
+    unsigned sprY = (scanline - oam[i].y) % spr_height();  // Line inside the sprite.
+    if (oam[i].attr & 0x80)
+        sprY ^= spr_height() - 1;      // Vertical flip.
+    addr += sprY + (sprY & 8);  // Select the second tile if on 8x16.
+
+    return addr;
+}
+
 /* Process a pixel, draw it if it's on screen */
 void pixel()
 {
@@ -251,6 +303,7 @@ void pixel()
     bool objPriority = 0;
     int x = dot - 2;
 
+    video = 0; // @TODO: output proper background!
     if (scanline < 240 and x >= 0 and x < 256)
     {
         if (mask.bg and not (!mask.bgLeft && x < 8))
@@ -284,7 +337,9 @@ void pixel()
         // Evaluate priority:
         if (objPalette && (palette == 0 || objPriority == 0)) palette = objPalette;
 
-        pixels[scanline*256 + x] = nesRgb[rd(0x3F00 + (rendering() ? palette : 0))];
+        //pixels[scanline*256 + x] = nesRgb[rd(0x3F00 + (rendering() ? palette : 0))];
+        video = nesRgb[rdPalette((rendering() ? palette : 0))];
+        pixels[scanline*256 + x] = video;
     }
     // Perform background shifts:
     bgShiftL <<= 1; bgShiftH <<= 1;
@@ -295,57 +350,80 @@ void pixel()
 /* Execute a cycle of a scanline */
 template<Scanline s> void scanline_cycle()
 {
-    static u16 addr;
-
     if (s == NMI and dot == 1)
         status.vBlank = true;
     else if (s == VISIBLE or s == PRE)
     {
+        int spriteIndex;
         // Sprites:
-        switch (dot)
+        if (mask.spr) switch (dot)
         {
             case   1: clear_oam(); if (s == PRE) { status.sprOvf = status.sprHit = false; } break;
-            case 257: eval_sprites(); break;
-            case 321: load_sprites(); break;
+//            case 257: eval_sprites(); break;
+//            case 321: load_sprites(); break;
+
+            case 256: eval_sprites(); break;
+            //case 257 ... 321:
+            case 260 ... 321:
+                spriteIndex = (dot - 260) / 8;
+                switch ((dot - 260) % 8)
+                {
+                    case 0: oam[spriteIndex] = secOam[spriteIndex];
+                            busAddr = sprite_addr(spriteIndex)    ; busRead = true; break;
+                    case 1: oam[spriteIndex].dataL = busData; busRead = false; break;
+                    case 2: busAddr += 8; busRead = true; break;
+                    case 3: oam[spriteIndex].dataH = busData; busRead = false; break;
+                }
+                break;
         }
         // Background:
-        switch (dot)
+        if (mask.bg) switch (dot)
         {
             case 2 ... 255: case 322 ... 337:
                 pixel();
                 switch (dot % 8)
                 {
                     // Nametable:
-                    case 1:  addr  = nt_addr(); reload_shift(); break;
-                    case 2:  nt    = rd(addr);  break;
+                    case 1:  busAddr  = nt_addr(); busRead = true; reload_shift(); break;
+                    case 2:  nt       = busData;   busRead = false; break;
                     // Attribute:
-                    case 3:  addr  = at_addr(); break;
-                    case 4:  at    = rd(addr);  if (vAddr.cY & 2) at >>= 4;
+                    case 3:  busAddr  = at_addr(); busRead = true; break;
+                    case 4:  at       = busData;   busRead = false;
+                                                if (vAddr.cY & 2) at >>= 4;
                                                 if (vAddr.cX & 2) at >>= 2; break;
                     // Background (low bits):
-                    case 5:  addr  = bg_addr(); break;
-                    case 6:  bgL   = rd(addr);  break;
+                    case 5:  busAddr  = bg_addr(); busRead = true; break;
+                    case 6:  bgL      = busData;   busRead = false; break;
                     // Background (high bits):
-                    case 7:  addr += 8;         break;
-                    case 0:  bgH   = rd(addr); h_scroll(); break;
+                    case 7:  busAddr += 8;      busRead = true; break;
+                    case 0:  bgH     = busData; busRead = false; h_scroll(); break;
                 } break;
-            case         256:  pixel(); bgH = rd(addr); v_scroll(); break;  // Vertical bump.
-            case         257:  pixel(); reload_shift(); h_update(); break;  // Update horizontal position.
-            case 280 ... 304:  if (s == PRE)            v_update(); break;  // Update vertical position.
+            case         256:  pixel(); bgH = busData; busRead = false; v_scroll(); break;      // Vertical bump.
+            case         257:  pixel(); reload_shift(); h_update(); break;                      // Update horizontal position.
+            case 280 ... 304:  if (s == PRE)                            v_update(); break;      // Update vertical position.
 
             // No shift reloading:
-            case             1:  addr = nt_addr(); if (s == PRE) status.vBlank = false; break;
-            case 321: case 339:  addr = nt_addr(); break;
+            case             1:  busAddr = nt_addr(); busRead = true; if (s == PRE) status.vBlank = false; break;
+            case 321: case 339:  busAddr = nt_addr(); busRead = true; break;
             // Nametable fetch instead of attribute:
-            case           338:  nt = rd(addr); break;
-            case           340:  nt = rd(addr); if (s == PRE && rendering() && frameOdd) dot++;
+            case           338:  nt = busData; busRead = false; break;
+            case           340:  nt = busData; busRead = false; if (s == PRE && rendering() && frameOdd) dot++;
         }
         // Signal scanline to mapper:
-        if (dot == 260 && rendering()) signal_scanline();
+        //if (dot == 260 && rendering()) signal_scanline();
     }
 
-    if (status.vBlank && ctrl.nmi)
-        cpu_set_nmi();
+    nmi = status.vBlank && ctrl.nmi;
+    // https://wiki.nesdev.com/w/index.php/NMI
+    // Two 1-bit registers inside the PPU control the generation of NMI signals. Frame timing and accesses to the PPU's PPUCTRL
+    // and PPUSTATUS registers change these registers as follows, regardless of whether rendering is enabled:
+    //   1. Start of vertical blanking: Set NMI_occurred in PPU to true.
+    //   2. End of vertical blanking, sometime in pre-render scanline: Set NMI_occurred to false.
+    //   3. Read PPUSTATUS: Return old status of NMI_occurred in bit 7, then set NMI_occurred to false.
+    //   4. Write to PPUCTRL: Set NMI_output to bit 7.
+    // The PPU pulls /NMI low if and only if both NMI_occurred and NMI_output are true. By toggling NMI_output (PPUCTRL.7) during
+    // vertical blank without reading PPUSTATUS, a program can cause /NMI to be pulled low multiple times, causing multiple NMIs
+    // to be generated.
 }
 
 /* Execute a PPU cycle. */
@@ -377,13 +455,83 @@ void reset()
     ctrl.r = mask.r = status.r = 0;
 
     memset(pixels, 0x00, sizeof(pixels));
-    memset(ciRam,  0xFF, sizeof(ciRam));
     memset(oamMem, 0x00, sizeof(oamMem));
+    //memset(ciRam,  0xFF, sizeof(ciRam));
 }
 
-u32* get_pixels()
+//u32* get_pixels()
+//{
+//    return pixels;
+//}
+
+}
+
+
+//uint64_t ppu_reset(ppu_t* ppu);
+//uint64_t ppu_tick(ppu_t* cpu, uint64_t pins);
+
+ppu_pins_t ppu_init(ppu_t* ppu)
 {
-    return pixels;
+    PPU::reset();
+    ppu_pins_t pins;
+    pins.rst = pins.irq = pins.rd = pins.wr = pins.ale = pins.cs = false;
+    return pins;
 }
 
+ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
+{
+    pins.ale = false;
+    if (PPU::busRead) PPU::busData = pins.ad;
+    if (PPU::busWrite) pins.ad = PPU::busData;
+    if (!PPU::busRead) pins.rd = false;
+    if (!PPU::busWrite) pins.wr = false;
+    PPU::busRead = false;
+    PPU::busWrite = false; // continue holding WR high and upper-bits of address in PA (Ppu memory Address) set for 1 more cycle
+
+    PPU::step();
+
+    if (pins.cs && !pins.rw) // write
+        PPU::access<1>(pins.a, pins.d);
+    if (pins.cs && pins.rw) // read
+        pins.d = PPU::access<0>(pins.a, 0);
+
+    pins.irq = PPU::nmi;
+    pins.video = PPU::video;
+
+    if (PPU::busRead)//!pins.cs && PPU::busRead)
+    {
+        pins.ad = 0;
+        //pins.ad = PPU::busAddr & 0xFF;
+        //pins.pa = (PPU::busAddr >> 8) & 0xFF;
+        pins.pa = PPU::busAddr;
+        pins.rd = true;
+        pins.wr = false;
+        pins.ale = false;
+    }
+    else if (PPU::busWrite) //!pins.cs && PPU::busWrite)
+    {
+        //pins.ad = PPU::busAddr & 0xFF;
+        //pins.pa = (PPU::busAddr >> 8) & 0xFF;
+        pins.ad = PPU::busData;
+        pins.pa = PPU::busAddr;
+        pins.rd = false;
+        pins.wr = true;  //  WR                        stays high for 2 cycles
+        pins.ale = true; // ALE (Address Latch Enable) stays high for 1 cycle
+    }
+    else
+    {
+        pins.rd = false;
+        pins.wr = false;
+        pins.ale = false;
+
+        //PPU::busAddr = 0;
+        //PPU::busData = 0;
+    }
+
+    return pins;
+}
+
+u32* ppu_pixels()
+{
+    return PPU::pixels;
 }
