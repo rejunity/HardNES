@@ -129,26 +129,7 @@ union Addr
     unsigned r : 15;
 };
 
-//template <bool write> u8 access(u16 index, u8 v = 0);
-//void set_mirroring(Mirroring mode);
-//void step();
-//void reset();
-//u32* get_pixels();
-
 }
-
-//u8 ciRam[0x800];           // VRAM for nametables.
-//u16 nt_mirror(u16 addr)
-//{
-//    switch (mirroring)
-//    {
-//        case VERTICAL:    return addr % 0x800;
-//        case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
-//        default:          return addr - 0x2000;
-//    }
-//}
-//PPU::Mirroring mirroring;       // Mirroring mode.
-//u32 pixels[256 * 240];     // Video buffer.
 
 struct ppu_t
 {
@@ -174,10 +155,6 @@ struct ppu_t
     int scanline, dot;
     bool frameOdd;
 };
-// /* initialize a new PPU instance and return initial pin mask */
-//uint64_t ppu_init(ppu_t* ppu);
-// /* execute one tick */
-//uint64_t ppu_tick(ppu_t* cpu, uint64_t pins);
 
 ppu_pins_t ppu_init(ppu_t* ppu);
 ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins);

@@ -135,23 +135,6 @@ void dma_oam(u8 bank)
     dmaCounter = 256 * 2;
 }
 
-//u8 chr_read(u16 addr)
-//{
-//    return chr[addr % 0x2000];
-//}
-//void chr_write(u16 addr, u8 v) {}
-//u8 ci_read(u16 addr)
-//{
-//    return ciRam[nt_mirror(addr)];
-//}
-//void ci_write(u16 addr, u8 v)
-//{
-//    ciRam[nt_mirror(addr)] = v;
-//}
-
-//void cpu_set_nmi() { cpuPins |= M6502_NMI; }
-//void signal_scanline() {}
-
 void tick(m6502_t& cpu, size_t cycle)
 {
     u16 pc = m6502_pc(&cpu);

@@ -10,13 +10,6 @@ extern void logNull(...);
 
 #define NTH_BIT(x, n) (((x) >> (n)) & 1)
 
-//extern u8 chr_read(u16 addr);
-//extern void chr_write(u16 addr, u8 v);
-//extern u8 ci_read(u16 addr);
-//extern void ci_write(u16 addr, u8 v);
-//extern void cpu_set_nmi();
-//extern void signal_scanline();
-
 namespace PPU {
 #include "palette.inc"
 
@@ -52,39 +45,22 @@ bool nmi;
 inline bool rendering() { return mask.bg || mask.spr; }
 inline int spr_height() { return ctrl.sprSz ? 16 : 8; }
 
-/* Get CIRAM address according to mirroring */
-//u16 nt_mirror(u16 addr)
-//{
-//    switch (mirroring)
-//    {
-//        case VERTICAL:    return addr % 0x800;
-//        case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
-//        default:          return addr - 0x2000;
-//    }
-//}
-//void set_mirroring(Mirroring mode) { mirroring = mode; }
-
 /* Access PPU memory */
 u8 rdPalette(u8 index)
 {
     if ((index & 0x13) == 0x10) index &= ~0x10;
     return cgRam[index & 0x1F] & (mask.gray ? 0x30 : 0xFF);
 }
+
 u8 rd(u16 addr)
 {
     if (busRead || busWrite)
         ERR("PPU bus read collision @(%dx%d), newaddr:%04X, oldadrr:%04X read:%d write:%d\n", scanline, dot, addr, busAddr, (int)busRead, (int)busWrite);
     switch (addr)
     {
-        //case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
-        //case 0x2000 ... 0x3EFF:  return ciRam[nt_mirror(addr)];             // Nametables
-        //case 0x3F00 ... 0x3FFF:  // Palettes:
-        //    if ((addr & 0x13) == 0x10) addr &= ~0x10;
-        //    return cgRam[addr & 0x1F] & (mask.gray ? 0x30 : 0xFF);
-        case 0x3F00 ... 0x3FFF:  // Palettes:
+        case 0x3F00 ... 0x3FFF: // on-chip palette RAMs
             return rdPalette(addr & 0xFF);
-//        case 0x0000 ... 0x1FFF:  return chr_read(addr);                     // CHR-ROM/RAM
-//        case 0x2000 ... 0x3EFF:  return ci_read(addr);             // Nametables
+
         default:
             busAddr = addr;
             busRead = true;
@@ -98,15 +74,10 @@ void wr(u16 addr, u8 v)
         ERR("PPU bus write collision @(%dx%d), value: %02X newaddr:%04X, oldadrr:%04X read:%d write:%d\n", scanline, dot, v, addr, busAddr, (int)busRead, (int)busWrite);
     switch (addr)
     {
-        //case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
-        //case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;         // Nametables
-        case 0x3F00 ... 0x3FFF:  // Palettes:
+        case 0x3F00 ... 0x3FFF:  // on-chip palette RAMs
             if ((addr & 0x13) == 0x10) addr &= ~0x10;
             cgRam[addr & 0x1F] = v;
             break;
-
-//        case 0x0000 ... 0x1FFF:  chr_write(addr, v); break;                 // CHR-ROM/RAM
-//        case 0x2000 ... 0x3EFF:  ci_write(addr, v); break;         // Nametables
 
         default:
             busAddr = addr;
@@ -120,7 +91,6 @@ void wr(u16 addr, u8 v)
 template <bool write> u8 access(u16 index, u8 v)
 {
     static u8 res;      // Result of the operation.
-    static u8 buffer;   // VRAM read buffer.
     static bool latch;  // Detect second reading.
 
     const char* registerName = "unknown";
@@ -170,10 +140,7 @@ template <bool write> u8 access(u16 index, u8 v)
             case 2: res = (res & 0x1F) | status.r; status.vBlank = 0; latch = 0; break;
             case 4: res = oamMem[oamAddr]; break;   // OAMDATA ($2004).
             case 7:                                 // PPUDATA ($2007).
-                    res = buffer;
-                    buffer = rd(vAddr.addr);
-//                    if (vAddr.addr >= 0x3F00)
-                        res = buffer;
+                    res = rd(vAddr.addr);
                     vAddr.addr += ctrl.incr ? 32 : 1;
                     break;
         }
@@ -255,30 +222,7 @@ void eval_sprites()
     }
 }
 
-/* Load the sprite info into primary OAM and fetch their tile data. */
-void load_sprites()
-{
-    u16 addr;
-    for (int i = 0; i < 8; i++)
-    {
-        oam[i] = secOam[i];  // Copy secondary OAM into primary.
-
-        // Different address modes depending on the sprite height:
-        if (spr_height() == 16)
-            addr = ((oam[i].tile & 1) * 0x1000) + ((oam[i].tile & ~1) * 16);
-        else
-            addr = ( ctrl.sprTbl      * 0x1000) + ( oam[i].tile       * 16);
-
-        unsigned sprY = (scanline - oam[i].y) % spr_height();  // Line inside the sprite.
-        if (oam[i].attr & 0x80) sprY ^= spr_height() - 1;      // Vertical flip.
-        addr += sprY + (sprY & 8);  // Select the second tile if on 8x16.
-
-        oam[i].dataL = rd(addr + 0);
-        oam[i].dataH = rd(addr + 8);
-    }
-}
-
-/* Load the sprite info into primary OAM and fetch their tile data. */
+/* Get sprite tile data address. */
 u16 sprite_addr(int i)
 {
     // Different address modes depending on the sprite height:
@@ -337,7 +281,6 @@ void pixel()
         // Evaluate priority:
         if (objPalette && (palette == 0 || objPriority == 0)) palette = objPalette;
 
-        //pixels[scanline*256 + x] = nesRgb[rd(0x3F00 + (rendering() ? palette : 0))];
         video = nesRgb[rdPalette((rendering() ? palette : 0))];
         pixels[scanline*256 + x] = video;
     }
@@ -359,8 +302,6 @@ template<Scanline s> void scanline_cycle()
         if (mask.spr) switch (dot)
         {
             case   1: clear_oam(); if (s == PRE) { status.sprOvf = status.sprHit = false; } break;
-//            case 257: eval_sprites(); break;
-//            case 321: load_sprites(); break;
 
             case 256: eval_sprites(); break;
             //case 257 ... 321:
@@ -409,8 +350,6 @@ template<Scanline s> void scanline_cycle()
             case           338:  nt = busData; busRead = false; break;
             case           340:  nt = busData; busRead = false; if (s == PRE && rendering() && frameOdd) dot++;
         }
-        // Signal scanline to mapper:
-        //if (dot == 260 && rendering()) signal_scanline();
     }
 
     nmi = status.vBlank && ctrl.nmi;
@@ -459,16 +398,8 @@ void reset()
     //memset(ciRam,  0xFF, sizeof(ciRam));
 }
 
-//u32* get_pixels()
-//{
-//    return pixels;
-//}
-
 }
 
-
-//uint64_t ppu_reset(ppu_t* ppu);
-//uint64_t ppu_tick(ppu_t* cpu, uint64_t pins);
 
 ppu_pins_t ppu_init(ppu_t* ppu)
 {
@@ -523,9 +454,6 @@ ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
         pins.rd = false;
         pins.wr = false;
         pins.ale = false;
-
-        //PPU::busAddr = 0;
-        //PPU::busData = 0;
     }
 
     return pins;
