@@ -64,7 +64,6 @@ u8 rd(u16 addr)
         default:
             busAddr = addr;
             busRead = true;
-            busWrite = false;
             return busData; // NOTE: returns stale data from the last cycle!
     }
 }
@@ -83,7 +82,6 @@ void wr(u16 addr, u8 v)
             busAddr = addr;
             busData = v;
             busWrite = true;
-            busRead = false;
     }
 }
 
@@ -310,10 +308,10 @@ template<Scanline s> void scanline_cycle()
                 switch ((dot - 260) % 8)
                 {
                     case 0: oam[spriteIndex] = secOam[spriteIndex];
-                            busAddr = sprite_addr(spriteIndex)    ; busRead = true; break;
-                    case 1: oam[spriteIndex].dataL = busData; busRead = false; break;
+                            busAddr = sprite_addr(spriteIndex); busRead = true; break;
+                    case 1: oam[spriteIndex].dataL = busData; break;
                     case 2: busAddr += 8; busRead = true; break;
-                    case 3: oam[spriteIndex].dataH = busData; busRead = false; break;
+                    case 3: oam[spriteIndex].dataH = busData; break;
                 }
                 break;
         }
@@ -326,20 +324,20 @@ template<Scanline s> void scanline_cycle()
                 {
                     // Nametable:
                     case 1:  busAddr  = nt_addr(); busRead = true; reload_shift(); break;
-                    case 2:  nt       = busData;   busRead = false; break;
+                    case 2:  nt       = busData;   break;
                     // Attribute:
                     case 3:  busAddr  = at_addr(); busRead = true; break;
-                    case 4:  at       = busData;   busRead = false;
+                    case 4:  at       = busData;
                                                 if (vAddr.cY & 2) at >>= 4;
                                                 if (vAddr.cX & 2) at >>= 2; break;
                     // Background (low bits):
                     case 5:  busAddr  = bg_addr(); busRead = true; break;
-                    case 6:  bgL      = busData;   busRead = false; break;
+                    case 6:  bgL      = busData;   break;
                     // Background (high bits):
                     case 7:  busAddr += 8;      busRead = true; break;
-                    case 0:  bgH     = busData; busRead = false; h_scroll(); break;
+                    case 0:  bgH     = busData; h_scroll(); break;
                 } break;
-            case         256:  pixel(); bgH = busData; busRead = false; v_scroll(); break;      // Vertical bump.
+            case         256:  pixel(); bgH = busData;  v_scroll(); break;      // Vertical bump.
             case         257:  pixel(); reload_shift(); h_update(); break;                      // Update horizontal position.
             case 280 ... 304:  if (s == PRE)                            v_update(); break;      // Update vertical position.
 
@@ -347,8 +345,8 @@ template<Scanline s> void scanline_cycle()
             case             1:  busAddr = nt_addr(); busRead = true; if (s == PRE) status.vBlank = false; break;
             case 321: case 339:  busAddr = nt_addr(); busRead = true; break;
             // Nametable fetch instead of attribute:
-            case           338:  nt = busData; busRead = false; break;
-            case           340:  nt = busData; busRead = false; if (s == PRE && rendering() && frameOdd) dot++;
+            case           338:  nt = busData; break;
+            case           340:  nt = busData; if (s == PRE && rendering() && frameOdd) dot++;
         }
     }
 
