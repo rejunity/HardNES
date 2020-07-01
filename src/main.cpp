@@ -163,17 +163,15 @@ void tick(ppu_t& ppu, size_t cycle)
     ppuPins = ppu_tick(&ppu, ppuPins);
     if (ppuPins.rd)
     { // read
-        //ppu_read((ppuPins.pa << 8) + ppuPins.ad);
-        ppu_read(ppuPins.pa);
+        ppu_read((ppuPins.pa << 8) + ppuPins.ad);
     }
     else if (ppuPins.wr)
     { // write
-        //static u8 latch = 0;
-        //if (ppuPins.ale)
-        //    latch = ppuPins.ad;
-        //else
-        //    ppu_write((ppuPins.pa << 8) + latch, ppuPins.ad);
-        ppu_write(ppuPins.pa);
+        static u8 addressLatch = 0;
+        if (ppuPins.ale) // Address Latch Enable
+            addressLatch = ppuPins.ad;
+        else
+            ppu_write((ppuPins.pa << 8) + addressLatch);
     }
 }
 

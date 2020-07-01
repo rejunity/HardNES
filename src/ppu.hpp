@@ -40,7 +40,7 @@ struct ppu_pins_t
     unsigned irq : 1;
     unsigned ale : 1;
     unsigned ad : 8;
-    unsigned pa : 16;// @TODO: should be actualy 6;
+    unsigned pa : 6;
     unsigned rd : 1;
     unsigned wr : 1;
     unsigned rst : 1;

@@ -38,7 +38,7 @@ bool frameOdd;
 u16 busAddr;
 u8 busData;
 bool busRead;
-bool busWrite;
+int busWrite; // 2 cycle write
 u32 video;
 bool nmi;
 
@@ -81,7 +81,7 @@ void wr(u16 addr, u8 v)
         default:
             busAddr = addr;
             busData = v;
-            busWrite = true;
+            busWrite = 2; // 2 cycles write
     }
 }
 
@@ -393,7 +393,6 @@ void reset()
 
     memset(pixels, 0x00, sizeof(pixels));
     memset(oamMem, 0x00, sizeof(oamMem));
-    //memset(ciRam,  0xFF, sizeof(ciRam));
 }
 
 }
@@ -409,13 +408,8 @@ ppu_pins_t ppu_init(ppu_t* ppu)
 
 ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
 {
-    pins.ale = false;
     if (PPU::busRead) PPU::busData = pins.ad;
-    if (PPU::busWrite) pins.ad = PPU::busData;
-    if (!PPU::busRead) pins.rd = false;
-    if (!PPU::busWrite) pins.wr = false;
     PPU::busRead = false;
-    PPU::busWrite = false; // continue holding WR high and upper-bits of address in PA (Ppu memory Address) set for 1 more cycle
 
     PPU::step();
 
@@ -427,25 +421,30 @@ ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
     pins.irq = PPU::nmi;
     pins.video = PPU::video;
 
-    if (PPU::busRead)//!pins.cs && PPU::busRead)
+    if (PPU::busRead)
     {
-        pins.ad = 0;
-        //pins.ad = PPU::busAddr & 0xFF;
-        //pins.pa = (PPU::busAddr >> 8) & 0xFF;
-        pins.pa = PPU::busAddr;
+        pins.ad = PPU::busAddr & 0xFF;
+        pins.pa = PPU::busAddr >> 8;
         pins.rd = true;
         pins.wr = false;
         pins.ale = false;
     }
-    else if (PPU::busWrite) //!pins.cs && PPU::busWrite)
+    else if (PPU::busWrite == 2)
     {
-        //pins.ad = PPU::busAddr & 0xFF;
-        //pins.pa = (PPU::busAddr >> 8) & 0xFF;
-        pins.ad = PPU::busData;
-        pins.pa = PPU::busAddr;
+        pins.ad = PPU::busAddr & 0xFF;
+        pins.pa = PPU::busAddr >> 8;
         pins.rd = false;
         pins.wr = true;  //  WR                        stays high for 2 cycles
         pins.ale = true; // ALE (Address Latch Enable) stays high for 1 cycle
+        PPU::busWrite--;
+    }
+    else if (PPU::busWrite == 1)
+    {
+        pins.ad = PPU::busData;
+        pins.rd = false;
+        pins.wr = true; // continue holding WR high and upper-bits of address in PA (Ppu memory Address) set for 1 more cycle
+        pins.ale = false;
+        PPU::busWrite--;
     }
     else
     {
