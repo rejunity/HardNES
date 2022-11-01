@@ -107,102 +107,6 @@ u16 nt_mirror(u16 addr)
     }
 }
 
-// Access to memory
-void cpu_read(u16 addr)
-{
-    ppuPins.cs = false;
-    ppuPins.rw = true;
-    switch (addr)
-    {
-        case 0x0000 ... 0x1FFF:  cpuPins.d  = ram[addr & 0x7FF];            break;  // RAM
-        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.a = addr & 0x7; break;  // PPU
-        case 0x6000 ... 0x7FFF:  cpuPins.d  = prgRam[addr & 0x1FFF];        break;  // NROM-256 cartridge RAM
-        case 0x8000 ... 0xFFFF:  cpuPins.d  = prg[addr & 0x7FFF];           break;  // NROM-256 cartridge
-    }
-}
-
-void dma_oam(u8 bank);
-void cpu_write(u16 addr)
-{
-    ppuPins.cs = false;
-    ppuPins.rw = false;
-    u8 v = cpuPins.d;
-    switch (addr)
-    {
-        case            0x4014:  dma_oam(v);                                break;  // OAM DMA
-        case 0x0000 ... 0x1FFF:  ram[addr & 0x7FF] = v;                     break;  // RAM
-        case 0x2000 ... 0x3FFF:  ppuPins.cs = true;
-                                 ppuPins.a = addr & 0x7; ppuPins.d = v;     break;  // PPU
-        case 0x6000 ... 0x7FFF:  prgRam[addr & 0x1FFF] = v;                 break;  // NROM-256 cartridge
-    }
-}
-
-void ppu_read(u16 addr)
-{
-    switch (addr)
-    {
-        case 0x0000 ... 0x1FFF:  ppuPins.ad = chr[addr % 0x2000];           break;  // CHR-ROM/RAM
-        case 0x2000 ... 0x3EFF:  ppuPins.ad = ciRam[nt_mirror(addr)];       break;  // CIRAM nametables
-    }
-}
-
-void ppu_write(u16 addr)
-{
-    u8 v = ppuPins.ad;
-    switch (addr)
-    {
-        case 0x0000 ... 0x1FFF:  chr[addr % 0x2000] = v;                    break;  // CHR ROM/RAM
-        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v;                break;  // CIRAM nametables
-    }
-}
-
-u16 dmaAddr;
-size_t dmaCounter;
-void dma_oam(u8 bank)
-{
-    dmaAddr = bank*0x100;
-    dmaCounter = 256 * 2;
-}
-
-void tick(m6502_t& cpu, size_t cycle)
-{
-    u16 pc = m6502_pc(&cpu);
-    u8 opcode = prg[pc - 0x8000];
-
-    cpuPins.bits = m6502_tick(&cpu, cpuPins.bits);
-    if (cpuPins.rw)
-    { // read
-        cpu_read(cpuPins.a);
-        LOG("CPU t: %lu, op:%02X@%04X, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X => %02X\n", cycle, opcode, pc,
-            m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
-            cpuPins.a, cpuPins.d);
-    }
-    else
-    { // write
-        LOG("CPU t: %lu, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X <= %02X\n", cycle,
-            m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
-            cpuPins.a, cpuPins.d);
-        cpu_write(cpuPins.a);
-    }
-}
-
-void tick(ppu_t& ppu, size_t cycle)
-{
-    ppuPins = ppu_tick(&ppu, ppuPins);
-    if (ppuPins.rd)
-    { // read
-        ppu_read((ppuPins.pa << 8) + ppuPins.ad);
-    }
-    else if (ppuPins.wr)
-    { // write
-        static u8 addressLatch = 0;
-        if (ppuPins.ale) // Address Latch Enable
-            addressLatch = ppuPins.ad;
-        else
-            ppu_write((ppuPins.pa << 8) + addressLatch);
-    }
-}
-
 // Super Mario Bros. PRG
 // 8000 78           SEI
 // 8001 D8           CLD
@@ -304,8 +208,6 @@ int main(int argc, char** argv)
         // NES/FC consoles, $4016W.0 is used as a strobe line for the CMOS 4021 shift
         // register used inside NES/FC controllers.
 
-if (true)
-{
         bool verboseNMI = true;
         bool verboseIRQ = true;
 
@@ -398,33 +300,6 @@ if (true)
             if (cpuPins.nmi && verboseNMI) { printf("NMI @ t: %zu\n", cycles); verboseNMI = false; }
             if (cpuPins.irq && verboseIRQ) { printf("IRQ @ t: %zu\n", cycles); verboseIRQ = false; }
         }
-}
-else
-{
-        const size_t TOTAL_CYCLES = 29781;
-        for (size_t i = 0; i < TOTAL_CYCLES; i++)
-        {
-            bool cs = ppuPins.cs; ppuPins.cs = false;
-            tick(ppu, i);
-            tick(ppu, i); ppuPins.cs = cs; // @TEMP: quick&dirty way to simulate M2 for now, should be handled by LS139
-            tick(ppu, i);
-            cpuPins.nmi = ppuPins.irq;
-            if (ppuPins.irq) printf("NMI\n");
-            if (ppuPins.cs && ppuPins.rw) // @TEMP: should be handled by LS139 https://wiki.nesdev.com/w/index.php/74139
-                cpuPins.d = ppuPins.d;
-            ppuPins.cs = false;
-            if (dmaCounter > 0)
-            {
-                if (dmaCounter % 2 == 0)
-                    cpu_read(dmaAddr++);
-                else
-                    cpu_write(0x2004);
-                dmaCounter--;
-            }
-            else
-                tick(cpu, i);
-        }
-}
         SDL_RenderClear(renderer);
         SDL_UpdateTexture(canvas, NULL, ppu_pixels(), WIDTH * sizeof(u32));
         SDL_RenderCopy(renderer, canvas, NULL, NULL);

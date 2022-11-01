@@ -409,8 +409,6 @@ ppu_pins_t ppu_init(ppu_t* ppu)
 
 ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
 {
-if (true)
-{
     if (PPU::busRead) PPU::busData = pins.ad;
     PPU::busRead = false; //PPU::busWrite = false;
 
@@ -429,21 +427,21 @@ if (true)
     // @HACK: meanwhile use !ALE when accessing the memory
     if (PPU::busRead)
     {
+        assert(pins.rd == false && pins.wr == false && pins.ale == false);
         pins.rd = true;
-        pins.wr = false;
         pins.ale = true; // Address Latch Enable (ALE) is high for one half pixel, or 94ns
     }
     else if (PPU::busWrite == 2)
     {
-        pins.rd = false;
+        assert(pins.rd == false && pins.wr == false && pins.ale == false);
         pins.wr = true;
         pins.ale = true; // Address Latch Enable (ALE) is high for one half pixel, or 94ns
         PPU::busWrite--;
     }
     else if (PPU::busWrite == 1)
     {
-        pins.rd = false;
-        pins.wr = true;
+        assert(pins.rd == false);
+        assert(pins.wr == true);
         pins.ale = false;
         PPU::busWrite--;
     }
@@ -463,54 +461,6 @@ if (true)
     else
         pins.ad = PPU::busData;
     pins.pa = PPU::busAddr >> 8;
-}
-else
-{
-    if (PPU::busRead) PPU::busData = pins.ad;
-    PPU::busRead = false;
-
-    PPU::step();
-
-    if (pins.cs && !pins.rw) // write
-        PPU::access<1>(pins.a, pins.d);
-    if (pins.cs && pins.rw) // read
-        pins.d = PPU::access<0>(pins.a, 0);
-
-    pins.irq = PPU::nmi;
-    pins.video = PPU::video;
-
-    if (PPU::busRead)
-    {
-        pins.ad = PPU::busAddr & 0xFF;
-        pins.pa = PPU::busAddr >> 8;
-        pins.rd = true;
-        pins.wr = false;
-        pins.ale = true;
-    }
-    else if (PPU::busWrite)
-    {
-        pins.ad = PPU::busAddr & 0xFF;
-        pins.pa = PPU::busAddr >> 8;
-        pins.rd = false;
-        pins.wr = true;  //  WR                        stays high for 2 cycles
-        pins.ale = true; // ALE (Address Latch Enable) stays high for 1 cycle
-        PPU::busWrite--;
-    }
-    else if (PPU::busWrite == 1)
-    {
-        pins.ad = PPU::busData;
-        pins.rd = false;
-        pins.wr = true; // continue holding WR high and upper-bits of address in PA (Ppu memory Address) set for 1 more cycle
-        pins.ale = false;
-        PPU::busWrite--;
-    }
-    else
-    {
-        pins.rd = false;
-        pins.wr = false;
-        pins.ale = false;
-    }
-}
 
     return pins;
 }
