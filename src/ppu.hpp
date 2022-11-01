@@ -35,7 +35,7 @@ struct ppu_pins_t
     unsigned rw : 1;
     unsigned d : 8;
     unsigned a : 3;
-    unsigned cs : 1;
+    unsigned cs : 1; // aka DataBusEnable (DBE) in Famicom circuit diagram
     unsigned ext : 4;
     unsigned irq : 1;
     unsigned ale : 1;

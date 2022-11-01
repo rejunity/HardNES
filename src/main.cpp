@@ -4,12 +4,51 @@
 #define CHIPS_IMPL
 #include "m6502.h"
 #include "ppu.hpp"
+#include <cassert>
 
 void logNull(...) {}
 #define LOG logNull
 //#define LOG printf
 
-uint64_t cpuPins;
+struct dma_t
+{
+    u16 readAddr;
+    u16 counter;
+};
+
+void dma_init(dma_t* dma)
+{
+    dma->counter = 0;
+}
+
+void dma_request(dma_t* dma, u8 bank, u16 count)
+{
+    dma->readAddr = bank << 8;
+    dma->counter = count * 2;
+}
+
+cpu_pins_t dma_tick(dma_t* dma, cpu_pins_t pins)
+{
+    pins.rdy = (dma->counter > 0);
+    if (!pins.rdy)
+        return pins;
+
+    assert(dma->counter > 0);
+    dma->counter--;
+    if (dma->counter % 2 == 1)
+    { // read
+        pins.a = dma->readAddr++;
+        pins.rw = true;
+    }
+    else
+    { // write
+        pins.a = 0x2004;
+        pins.rw = false;
+    }
+    return pins;
+}
+
+cpu_pins_t cpuPins;
 ppu_pins_t ppuPins;
 uint8_t* ram;
 uint8_t* rom;
@@ -36,28 +75,17 @@ void load(const char* fileName)
     // Read ROM file header:
     int mapperType    = (rom[7] & 0xF0) | (rom[6] >> 4);
     size_t prgSize    = rom[4] * 0x4000;
-    size_t chrSize    = rom[5] * 0x2000;
     size_t prgRamSize = rom[8] ? rom[8] * 0x2000 : 0x2000;
+    size_t chrSize    = rom[5] ? rom[5] * 0x2000 : 0x2000;
+    bool hasChrRam    = rom[5] == 0;
     bool mirroring    = (rom[6] & 1);
 
     prg    = rom + 16;
     prgRam = (uint8_t*)malloc(prgRamSize);
-
-    // CHR ROM:
-    if (chrSize)
-    {
-        chr = rom + 16 + prgSize;
-    }
-    // CHR RAM:
-    else
-    {
-        // chrRam = true;
-        chrSize = 0x2000;
-        chr = (uint8_t*)malloc(chrSize);
-    }
+    chr    = (hasChrRam) ? (uint8_t*)malloc(chrSize): prg + prgSize;
 
     printf("ROM PRG:%lu, CHR:%lu, mapper:%d, mirroring: %s\n", prgSize, chrSize, mapperType, mirroring ? "|" : "--");
-    printf("RAM PRG:%lu, CHR:%lu\n", prgRamSize, 0LU);
+    printf("RAM PRG:%lu, CHR:%lu\n", prgRamSize, (hasChrRam) ? chrSize : 0LU);
 
     ciRamMirroring = mirroring ? PPU::VERTICAL : PPU::HORIZONTAL;
 
@@ -83,12 +111,13 @@ u16 nt_mirror(u16 addr)
 void cpu_read(u16 addr)
 {
     ppuPins.cs = false;
+    ppuPins.rw = true;
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  M6502_SET_DATA(cpuPins, ram[addr % 0x800]); break;                     // RAM
-        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.rw = true; ppuPins.a = addr % 8;  break;    // PPU
-        case 0x6000 ... 0x7FFF:  M6502_SET_DATA(cpuPins, prgRam[addr - 0x6000]); break;                 // NROM-256 cartridge
-        case 0x8000 ... 0xFFFF:  M6502_SET_DATA(cpuPins, prg[addr - 0x8000]); break;                    // NROM-256 cartridge
+        case 0x0000 ... 0x1FFF:  cpuPins.d  = ram[addr & 0x7FF];            break;  // RAM
+        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.a = addr & 0x7; break;  // PPU
+        case 0x6000 ... 0x7FFF:  cpuPins.d  = prgRam[addr & 0x1FFF];        break;  // NROM-256 cartridge RAM
+        case 0x8000 ... 0xFFFF:  cpuPins.d  = prg[addr & 0x7FFF];           break;  // NROM-256 cartridge
     }
 }
 
@@ -96,15 +125,15 @@ void dma_oam(u8 bank);
 void cpu_write(u16 addr)
 {
     ppuPins.cs = false;
-    u8 v =  M6502_GET_DATA(cpuPins);
+    ppuPins.rw = false;
+    u8 v = cpuPins.d;
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  ram[addr % 0x800] = v;          break;                         // RAM
-        case 0x2000 ... 0x3FFF:  ppuPins.cs = true; ppuPins.rw = false;
-                                 ppuPins.a = addr % 8; ppuPins.d = v; break;                    // PPU
-        case            0x4014:  dma_oam(v);                     break;                         // OAM DMA
-        case 0x6000 ... 0x7FFF:  prgRam[addr - 0x6000] = v;      break;                         // NROM-256 cartridge
-        case 0x8000 ... 0xFFFF:  prg[addr - 0x8000] = v;         break;                         // NROM-256 cartridge
+        case            0x4014:  dma_oam(v);                                break;  // OAM DMA
+        case 0x0000 ... 0x1FFF:  ram[addr & 0x7FF] = v;                     break;  // RAM
+        case 0x2000 ... 0x3FFF:  ppuPins.cs = true;
+                                 ppuPins.a = addr & 0x7; ppuPins.d = v;     break;  // PPU
+        case 0x6000 ... 0x7FFF:  prgRam[addr & 0x1FFF] = v;                 break;  // NROM-256 cartridge
     }
 }
 
@@ -112,8 +141,8 @@ void ppu_read(u16 addr)
 {
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  ppuPins.ad = chr[addr % 0x2000]; break;                        // CHR-ROM/RAM
-        case 0x2000 ... 0x3EFF:  ppuPins.ad = ciRam[nt_mirror(addr)]; break;                    // Nametables
+        case 0x0000 ... 0x1FFF:  ppuPins.ad = chr[addr % 0x2000];           break;  // CHR-ROM/RAM
+        case 0x2000 ... 0x3EFF:  ppuPins.ad = ciRam[nt_mirror(addr)];       break;  // CIRAM nametables
     }
 }
 
@@ -122,8 +151,8 @@ void ppu_write(u16 addr)
     u8 v = ppuPins.ad;
     switch (addr)
     {
-        case 0x0000 ... 0x1FFF:  chr[addr % 0x2000] = v; break;                                 // CHR-ROM/RAM
-        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v; break;                             // Nametables
+        case 0x0000 ... 0x1FFF:  chr[addr % 0x2000] = v;                    break;  // CHR ROM/RAM
+        case 0x2000 ... 0x3EFF:  ciRam[nt_mirror(addr)] = v;                break;  // CIRAM nametables
     }
 }
 
@@ -140,21 +169,20 @@ void tick(m6502_t& cpu, size_t cycle)
     u16 pc = m6502_pc(&cpu);
     u8 opcode = prg[pc - 0x8000];
 
-    cpuPins = m6502_tick(&cpu, cpuPins);
-    const uint16_t addr = M6502_GET_ADDR(cpuPins);
-    if (cpuPins & M6502_RW)
+    cpuPins.bits = m6502_tick(&cpu, cpuPins.bits);
+    if (cpuPins.rw)
     { // read
-        cpu_read(addr);
+        cpu_read(cpuPins.a);
         LOG("CPU t: %lu, op:%02X@%04X, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X => %02X\n", cycle, opcode, pc,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
-            addr, M6502_GET_DATA(cpuPins));
+            cpuPins.a, cpuPins.d);
     }
     else
     { // write
         LOG("CPU t: %lu, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X <= %02X\n", cycle,
             m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
-            addr, M6502_GET_DATA(cpuPins));
-        cpu_write(addr);
+            cpuPins.a, cpuPins.d);
+        cpu_write(cpuPins.a);
     }
 }
 
@@ -196,10 +224,15 @@ int main(int argc, char** argv)
     // initialize a 6502 instance:
     m6502_t cpu;
     m6502_desc_t desc;
-    cpuPins = m6502_init(&cpu, &desc);
+    cpuPins.bits = m6502_init(&cpu, &desc);
+
+    dma_t dma;
+    dma_init(&dma);
 
     ppu_t ppu;
     ppuPins = ppu_init(&ppu);
+
+    u8 ppuAddressLatch = 0; // 74LS373 address latch
 
     ram = (uint8_t*)malloc(0x800);
     memset(ram, 0xFF, 0x800);
@@ -231,6 +264,7 @@ int main(int argc, char** argv)
     const int DELAY = 1000.0f / FPS;
 
     bool quit = false;
+    size_t cycles = 0;
     while (!quit)
     {
         frameStart = SDL_GetTicks();
@@ -244,29 +278,153 @@ int main(int argc, char** argv)
                 case SDL_QUIT: quit = true; break;
             }
 
+        // https://wiki.nesdev.com/w/index.php/CPU_pin_out_and_signal_description
+        // CLK : 21.47727 MHz (NTSC) or 26.6017 MHz (PAL) clock input.
+        // Internally, this clock is divided by 12 (NTSC 2A03) or 16 (PAL 2A07) to feed the 6502's clock input φ0, which is in turn inverted to form φ1, which is then inverted to form φ2.
+        // φ1 is high during the first phase (half-cycle) of each CPU cycle, while φ2 is high during the second phase.
+        // M2 : Can be considered as a "signals ready" pin. It is a modified version the 6502's φ2 (which roughly corresponds to the CPU input clock φ0) that allows for slower ROMs. CPU cycles begin at the point where M2 goes low.
+        // In the NTSC 2A03, M2 has a duty cycle of 5/8th, or 350ns/559ns. Equivalently, a CPU read (which happens during the second, high phase of M2) takes 1 and 7/8th PPU cycles. The internal φ2 duty cycle is exactly 1/2 (one half).
+        // In the PAL 2A07, the duty cycle is not known, but suspected to be 19/32.
+
+        // http://nesdev.com/2A03%20technical%20reference.txt
+        // PHI2: this output is the divide-by-12 result of the CLK signal (1.79 MHz).
+        // The internal 6502 along with function generating hardware, is clocked off
+        // this frequency, and is available externally here so that it can be used as a
+        // data bus enable signal (when at logic level 1) for external 6502 address
+        // decoder logic. The signal has a 62.5% duty cycle.
+
+        // /$4017R: goes active (zero) when A0-A15 = $4017, R/W = 0, and PHI2 = 1. This
+        // informs an external 3-state inverter to throw controller port data onto the
+        // D0-D7 lines.
+        //
+        // /$4016R: goes active (zero) when A0-A15 = $4016, R/W = 0, and PHI2 = 1.
+        //
+        // $4016W.0, $4016W.1, $4016W.2: these signals represent the real-time status
+        // of a 3 bit writable register located at $4016 in the 6502 memory map. In
+        // NES/FC consoles, $4016W.0 is used as a strobe line for the CMOS 4021 shift
+        // register used inside NES/FC controllers.
+
+if (true)
+{
+        bool verboseNMI = true;
+        bool verboseIRQ = true;
+
+        const size_t MASTER_CLOCK_CYCLES_PER_FRAME = 21477270 / 60;
+
+//        1789772,5
+//        1.7897725 Mhz
+//        357954,5
+        //printf("PAL@60Hz, master clock cycles per frame: %zu\n", MASTER_CLOCK_CYCLES_PER_FRAME);
+        //for (size_t i = 0; i < MASTER_CLOCK_CYCLES_PER_FRAME; i++, cycles++)
+        const size_t TOTAL_CYCLES = 29781 * 12;
+        const size_t CYCLES_PER_ITERATION = 2;
+        const bool SUBPIXEL_ITERATIONS = (CYCLES_PER_ITERATION < 4);
+        for (size_t i = 0; i < TOTAL_CYCLES; i += CYCLES_PER_ITERATION)
+        {
+            cycles = i;
+            bool cpuClkPosEdge = (cycles % 12 == 0);
+            bool ppuClkPosEdge = (cycles % 4 == 0);
+            bool ppuClkNegEdge = SUBPIXEL_ITERATIONS ? (cycles % 2 == 0): ppuClkPosEdge;
+            bool m2 = (cycles % 12 > 7); // NTSC 2A03, M2 has a duty cycle of 5/8th,
+
+            // 74LS139 address decoder
+            ppuPins.cs = m2 && (cpuPins.a & 0x2000) && !(cpuPins.a & 0x4000) && !(cpuPins.a & 0x8000);
+            ppuPins.rw = cpuPins.rw;
+            ppuPins.a = cpuPins.a & 0b111;
+
+            if (ppuClkPosEdge)
+                ppuPins = ppu_tick(&ppu, ppuPins);
+            cpuPins.nmi = ppuPins.irq;
+
+            if (cpuClkPosEdge)
+                cpuPins = dma_tick(&dma, cpuPins); // shares pins with CPU
+
+            // @TODO: RDY should be handled inside m6502_tick()
+            if (cpuClkPosEdge && !cpuPins.rdy)
+                cpuPins.bits = m6502_tick(&cpu, cpuPins.bits);
+
+            if (cpuClkPosEdge)
+                LOG("CPU t: %zu, op:%02X@%04X, a:%02X x:%02X y:%02X s:%02X p:%02X, addr:%04X %s %02X\n", cycles/12,
+                    prg[m6502_pc(&cpu)&0x7FFF], m6502_pc(&cpu),
+                    m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu),
+                    cpuPins.a, (cpuPins.rw ? "=>" : "<="), cpuPins.d);
+
+            // @TODO: m2 should drive SRAM U1 CS pin through LS139 out pin 4
+            // NOTE: SRAM U1 OE is shorted to ground
+            if (m2 && cpuPins.rw) switch (cpuPins.a) // read
+            {
+                case 0x0000 ... 0x1FFF:  cpuPins.d = ram[cpuPins.a & 0x7FF];     break; // RAM
+                case 0x2000 ... 0x3FFF:  cpuPins.d = ppuPins.d;                  break; // PPU
+                case 0x6000 ... 0x7FFF:  cpuPins.d = prgRam[cpuPins.a & 0x1FFF]; break; // NROM-256 cartridge
+                case 0x8000 ... 0xFFFF:  cpuPins.d = prg[cpuPins.a & 0x7FFF];    break; // NROM-256 cartridge
+            }
+            if (!cpuPins.rw) switch (cpuPins.a) // write
+            {
+                case            0x4014:  dma_request(&dma, cpuPins.d, 256);      break; // OAM DMA
+                case 0x0000 ... 0x1FFF:  ram[cpuPins.a & 0x7FF]     = cpuPins.d; break; // RAM
+                case 0x2000 ... 0x3FFF:  ppuPins.d                  = cpuPins.d; break; // PPU
+                case 0x6000 ... 0x7FFF:  prgRam[cpuPins.a & 0x1FFF] = cpuPins.d; break; // RAM on cartridge
+                //case 0x8000 ... 0xFFFF: cpuPins.d &= prg[cpuPins.a & 0x7FFF]; break;  // ROM cartridge bus collision
+            }
+
+            // 74LS373 address latch
+            if (ppuPins.ale) // Address Latch Enable
+                ppuAddressLatch = ppuPins.ad;
+
+            // @TODO: nametable address swizzling (aka mirroring) should be done here
+            u16 ppuAddr = ((ppuPins.pa & 0x3F) << 8) + (ppuAddressLatch & 0xFF);
+
+            // @TODO: find/measure precise ALE/RD/WR subpixel timing
+            // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
+            // NOTE: (ALE) is high for one half pixel, or 94ns
+            bool ppuRD = ((SUBPIXEL_ITERATIONS) ? !ppuPins.ale: true) && ppuPins.rd;
+            bool ppuWR = ((SUBPIXEL_ITERATIONS) ? !ppuPins.ale: true) && ppuPins.wr;
+
+            if (ppuRD) switch (ppuAddr) // read
+            {
+                case 0x0000 ... 0x1FFF: ppuPins.ad = chr[ppuAddr];              break; // CHR-ROM/RAM
+                case 0x2000 ... 0x3EFF: ppuPins.ad = ciRam[nt_mirror(ppuAddr)]; break; // CIRAM nametables
+            }
+            if (ppuWR) switch (ppuAddr) // write
+            {
+                case 0x0000 ... 0x1FFF: chr[ppuAddr]              = ppuPins.ad; break; // CHR-ROM/RAM
+                case 0x2000 ... 0x3EFF: ciRam[nt_mirror(ppuAddr)] = ppuPins.ad; break; // CIRAM nametables
+            }
+
+            // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
+            if (ppuClkNegEdge)
+                ppuPins.ale = false;
+
+            if (cpuPins.nmi && verboseNMI) { printf("NMI @ t: %zu\n", cycles); verboseNMI = false; }
+            if (cpuPins.irq && verboseIRQ) { printf("IRQ @ t: %zu\n", cycles); verboseIRQ = false; }
+        }
+}
+else
+{
         const size_t TOTAL_CYCLES = 29781;
         for (size_t i = 0; i < TOTAL_CYCLES; i++)
         {
             bool cs = ppuPins.cs; ppuPins.cs = false;
             tick(ppu, i);
-            tick(ppu, i); ppuPins.cs = cs; // quick&dirty way to simulate M2 for now, should be handled by LS139
+            tick(ppu, i); ppuPins.cs = cs; // @TEMP: quick&dirty way to simulate M2 for now, should be handled by LS139
             tick(ppu, i);
-            if (ppuPins.irq) cpuPins |= M6502_NMI; else cpuPins &= ~M6502_NMI;
-            if (ppuPins.cs && ppuPins.rw) // should be handled by LS139 https://wiki.nesdev.com/w/index.php/74139
-                M6502_SET_DATA(cpuPins, ppuPins.d);
+            cpuPins.nmi = ppuPins.irq;
+            if (ppuPins.irq) printf("NMI\n");
+            if (ppuPins.cs && ppuPins.rw) // @TEMP: should be handled by LS139 https://wiki.nesdev.com/w/index.php/74139
+                cpuPins.d = ppuPins.d;
             ppuPins.cs = false;
             if (dmaCounter > 0)
             {
                 if (dmaCounter % 2 == 0)
                     cpu_read(dmaAddr++);
                 else
-                    cpu_write(0x2014);
+                    cpu_write(0x2004);
                 dmaCounter--;
             }
             else
                 tick(cpu, i);
         }
-
+}
         SDL_RenderClear(renderer);
         SDL_UpdateTexture(canvas, NULL, ppu_pixels(), WIDTH * sizeof(u32));
         SDL_RenderCopy(renderer, canvas, NULL, NULL);

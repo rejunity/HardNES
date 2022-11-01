@@ -1,4 +1,5 @@
 #include "ppu.hpp"
+#include <cassert>
 #include <cstring>
 #include <stdio.h>
 
@@ -408,6 +409,63 @@ ppu_pins_t ppu_init(ppu_t* ppu)
 
 ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
 {
+if (true)
+{
+    if (PPU::busRead) PPU::busData = pins.ad;
+    PPU::busRead = false; //PPU::busWrite = false;
+
+    PPU::step();
+
+    // CPU <=> PPU
+    if (pins.cs && !pins.rw) // write
+        PPU::access<1>(pins.a, pins.d);
+    if (pins.cs && pins.rw) // read
+        pins.d = PPU::access<0>(pins.a, 0);
+
+    pins.irq = PPU::nmi;
+    pins.video = PPU::video;
+
+    // @TODO: find out when RD and WR signals go high
+    // @HACK: meanwhile use !ALE when accessing the memory
+    if (PPU::busRead)
+    {
+        pins.rd = true;
+        pins.wr = false;
+        pins.ale = true; // Address Latch Enable (ALE) is high for one half pixel, or 94ns
+    }
+    else if (PPU::busWrite == 2)
+    {
+        pins.rd = false;
+        pins.wr = true;
+        pins.ale = true; // Address Latch Enable (ALE) is high for one half pixel, or 94ns
+        PPU::busWrite--;
+    }
+    else if (PPU::busWrite == 1)
+    {
+        pins.rd = false;
+        pins.wr = true;
+        pins.ale = false;
+        PPU::busWrite--;
+    }
+    else if (pins.ale)
+    {
+        pins.ale = false;
+    }
+    else
+    {
+        assert(pins.ale == false && PPU::busRead == false && PPU::busWrite == false);
+        pins.rd = false;
+        pins.wr = false;
+    }
+
+    if (pins.ale)
+        pins.ad = PPU::busAddr & 0xFF;
+    else
+        pins.ad = PPU::busData;
+    pins.pa = PPU::busAddr >> 8;
+}
+else
+{
     if (PPU::busRead) PPU::busData = pins.ad;
     PPU::busRead = false;
 
@@ -427,9 +485,9 @@ ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
         pins.pa = PPU::busAddr >> 8;
         pins.rd = true;
         pins.wr = false;
-        pins.ale = false;
+        pins.ale = true;
     }
-    else if (PPU::busWrite == 2)
+    else if (PPU::busWrite)
     {
         pins.ad = PPU::busAddr & 0xFF;
         pins.pa = PPU::busAddr >> 8;
@@ -452,6 +510,7 @@ ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
         pins.wr = false;
         pins.ale = false;
     }
+}
 
     return pins;
 }

@@ -207,6 +207,24 @@
 extern "C" {
 #endif
 
+union cpu_pins_t
+{
+    struct
+    {
+        unsigned a : 16;
+        unsigned d : 8;
+        unsigned rw : 1;
+        unsigned sync : 1;
+        unsigned irq : 1;
+        unsigned nmi : 1;
+        unsigned rdy : 1;
+        unsigned dummy : 1;
+        unsigned rst : 1;
+    };
+    uint64_t bits;
+};
+
+
 /* address bus pins */
 #define M6502_A0    (1ULL<<0)
 #define M6502_A1    (1ULL<<1)
