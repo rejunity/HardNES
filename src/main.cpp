@@ -3,6 +3,7 @@
 #include <SDL2/SDL.h>
 #define CHIPS_IMPL
 #include "m6502.h"
+#include "dma.hpp"
 #include "ppu.hpp"
 #include <cassert>
 
@@ -10,56 +11,26 @@ void logNull(...) {}
 #define LOG logNull
 //#define LOG printf
 
-struct dma_t
+// @TODO: group into cartridge_t struct
+struct cartridge_t
 {
-    u16 readAddr;
-    u16 counter;
+    uint8_t* rom;
+    uint8_t* prg;
+    uint8_t* prgRam;
+    uint8_t* chr;
+    PPU::Mirroring ciRamMirroring;
+    bool hasChrRam;
 };
 
-void dma_init(dma_t* dma)
+void cartridge_empty(cartridge_t* cart)
 {
-    dma->counter = 0;
+    // @TODO: initialise ROM with a simple test
+    cart->rom = cart->prg = cart->prgRam = cart->chr = 0;
+    cart->hasChrRam = false;
 }
-
-void dma_request(dma_t* dma, u8 bank, u16 count)
-{
-    dma->readAddr = bank << 8;
-    dma->counter = count * 2;
-}
-
-cpu_pins_t dma_tick(dma_t* dma, cpu_pins_t pins)
-{
-    pins.rdy = (dma->counter > 0);
-    if (!pins.rdy)
-        return pins;
-
-    assert(dma->counter > 0);
-    dma->counter--;
-    if (dma->counter % 2 == 1)
-    { // read
-        pins.a = dma->readAddr++;
-        pins.rw = true;
-    }
-    else
-    { // write
-        pins.a = 0x2004;
-        pins.rw = false;
-    }
-    return pins;
-}
-
-cpu_pins_t cpuPins;
-ppu_pins_t ppuPins;
-uint8_t* ram;
-uint8_t* rom;
-uint8_t* prg;
-uint8_t* prgRam;
-uint8_t* chr;
-uint8_t* ciRam;
-PPU::Mirroring ciRamMirroring;
 
 // Load the ROM from a file
-void load(const char* fileName)
+void cartridge_load(cartridge_t* cart, const char* fileName)
 {
     printf("Loading ROM: %s!\n", fileName);
     FILE* f = fopen(fileName, "rb");
@@ -68,7 +39,7 @@ void load(const char* fileName)
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    rom = (uint8_t*)malloc(size);
+    uint8_t* rom = (uint8_t*)malloc(size);
     fread(rom, size, 1, f);
     fclose(f);
 
@@ -80,14 +51,16 @@ void load(const char* fileName)
     bool hasChrRam    = rom[5] == 0;
     bool mirroring    = (rom[6] & 1);
 
-    prg    = rom + 16;
-    prgRam = (uint8_t*)malloc(prgRamSize);
-    chr    = (hasChrRam) ? (uint8_t*)malloc(chrSize): prg + prgSize;
+    cart->rom    = rom;
+    cart->prg    = rom + 16;
+    cart->prgRam = (uint8_t*)malloc(prgRamSize);
+    cart->chr    = (hasChrRam) ? (uint8_t*)malloc(chrSize): cart->prg + prgSize;
+    cart->hasChrRam = hasChrRam;
 
     printf("ROM PRG:%lu, CHR:%lu, mapper:%d, mirroring: %s\n", prgSize, chrSize, mapperType, mirroring ? "|" : "--");
     printf("RAM PRG:%lu, CHR:%lu\n", prgRamSize, (hasChrRam) ? chrSize : 0LU);
 
-    ciRamMirroring = mirroring ? PPU::VERTICAL : PPU::HORIZONTAL;
+    cart->ciRamMirroring = mirroring ? PPU::VERTICAL : PPU::HORIZONTAL;
 
     if (mapperType != 0)
     {
@@ -96,7 +69,18 @@ void load(const char* fileName)
     }
 }
 
+void cartridge_free(cartridge_t* cart)
+{
+    free(cart->rom);
+    free(cart->prgRam);
+    if (cart->hasChrRam)
+        free(cart->chr);
+}
+
+
+
 /* Get CIRAM address according to mirroring */
+PPU::Mirroring ciRamMirroring;
 u16 nt_mirror(u16 addr)
 {
     switch (ciRamMirroring)
@@ -122,23 +106,32 @@ int main(int argc, char** argv)
 {
     printf("Hello, NES!\n");
 
+    cartridge_t cart;
     if (argc > 1)
-        load(argv[1]);
+        cartridge_load(&cart, argv[1]);
+    else
+        cartridge_empty(&cart);
+    ciRamMirroring = cart.ciRamMirroring;
+    uint8_t* prg = cart.prg;
+    uint8_t* prgRam = cart.prgRam;
+    uint8_t* chr = cart.chr;
 
     // initialize a 6502 instance:
     m6502_t cpu;
     m6502_desc_t desc;
+    cpu_pins_t cpuPins;
     cpuPins.bits = m6502_init(&cpu, &desc);
 
     dma_t dma;
     dma_init(&dma);
 
     ppu_t ppu;
+    ppu_pins_t ppuPins;
     ppuPins = ppu_init(&ppu);
 
     u8 ppuAddressLatch = 0; // 74LS373 address latch
 
-    ram = (uint8_t*)malloc(0x800);
+    uint8_t* ram = (uint8_t*)malloc(0x800);
     memset(ram, 0xFF, 0x800);
     m6502_set_a(&cpu, 0x00);
     m6502_set_x(&cpu, 0x00);
@@ -146,7 +139,7 @@ int main(int argc, char** argv)
     m6502_set_s(&cpu, 0x00);
     m6502_set_p(&cpu, 0x04);
 
-    ciRam = (uint8_t*)malloc(0x800);
+    uint8_t* ciRam = (uint8_t*)malloc(0x800);
     memset(ciRam, 0xFF, 0x800);
 
     // Initialize graphics system
@@ -319,9 +312,9 @@ int main(int argc, char** argv)
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    free(rom);
     free(ram);
-    free(prgRam);
+    free(ciRam);
+    cartridge_free(&cart);
 
     printf("A:%02X X:%02X Y:%02X S:%02X P:%02X PC:%04X\n",
            m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu), m6502_pc(&cpu));
