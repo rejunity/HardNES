@@ -38,10 +38,11 @@ int main(int argc, char** argv)
     uint8_t* chr    = cart.chr;
 
     // initialize a 6502 instance:
+    m6502_desc_t cpuDesc;
+    cpuDesc.bcd_disabled = true;
     m6502_t cpu;
-    m6502_desc_t desc;
     cpu_pins_t cpuPins;
-    cpuPins.bits = m6502_init(&cpu, &desc);
+    cpuPins.bits = m6502_init(&cpu, &cpuDesc);
 
     dma_t dma;
     dma_init(&dma);
