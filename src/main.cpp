@@ -94,6 +94,42 @@ int main(int argc, char** argv)
 
     bool quit = false;
     size_t cycles = 0;
+
+    // https://wiki.nesdev.com/w/index.php/CPU_pin_out_and_signal_description
+    // CLK : 21.47727 MHz (NTSC) or 26.6017 MHz (PAL) clock input.
+    // Internally, this clock is divided by 12 (NTSC 2A03) or 16 (PAL 2A07) to feed the 6502's clock input φ0, which is in turn inverted to form φ1, which is then inverted to form φ2.
+    // φ1 is high during the first phase (half-cycle) of each CPU cycle, while φ2 is high during the second phase.
+    // M2 : Can be considered as a "signals ready" pin. It is a modified version the 6502's φ2 (which roughly corresponds to the CPU input clock φ0) that allows for slower ROMs. CPU cycles begin at the point where M2 goes low.
+    // In the NTSC 2A03, M2 has a duty cycle of 5/8th, or 350ns/559ns. Equivalently, a CPU read (which happens during the second, high phase of M2) takes 1 and 7/8th PPU cycles. The internal φ2 duty cycle is exactly 1/2 (one half).
+    // In the PAL 2A07, the duty cycle is not known, but suspected to be 19/32.
+
+    // http://nesdev.com/2A03%20technical%20reference.txt
+    // PHI2: this output is the divide-by-12 result of the CLK signal (1.79 MHz).
+    // The internal 6502 along with function generating hardware, is clocked off
+    // this frequency, and is available externally here so that it can be used as a
+    // data bus enable signal (when at logic level 1) for external 6502 address
+    // decoder logic. The signal has a 62.5% duty cycle.
+
+    // /$4017R: goes active (zero) when A0-A15 = $4017, R/W = 0, and PHI2 = 1. This
+    // informs an external 3-state inverter to throw controller port data onto the
+    // D0-D7 lines.
+    //
+    // /$4016R: goes active (zero) when A0-A15 = $4016, R/W = 0, and PHI2 = 1.
+    //
+    // $4016W.0, $4016W.1, $4016W.2: these signals represent the real-time status
+    // of a 3 bit writable register located at $4016 in the 6502 memory map. In
+    // NES/FC consoles, $4016W.0 is used as a strobe line for the CMOS 4021 shift
+    // register used inside NES/FC controllers.
+
+#if 0
+    const size_t MASTER_CLOCK_CYCLES_PER_SECOND = 21477270; // 21.47727 MHz (NTSC) 525 lines @ 29.97 frames per second
+    const size_t FRAMES_PER_SECOND = 60;                    // 60 fps (almost NSTC)
+    const size_t MASTER_CLOCK_CYCLES_PER_FRAME = MASTER_CLOCK_CYCLES_PER_SECOND / FRAMES_PER_SECOND;
+#else
+    const size_t MASTER_CLOCK_CYCLES_PER_FRAME = 29780.5 * 12; // 341 dots * 262 lines @ 60fps
+#endif
+    printf("NTSC@60Hz, master clock cycles per frame: %zu\n", MASTER_CLOCK_CYCLES_PER_FRAME);
+
     while (!quit)
     {
         frameStart = SDL_GetTicks();
@@ -101,54 +137,18 @@ int main(int argc, char** argv)
 
         // Handle events:
         SDL_Event e;
-        while (SDL_PollEvent(&e))
-            switch (e.type)
-            {
-                case SDL_QUIT: quit = true; break;
-            }
-
-        // https://wiki.nesdev.com/w/index.php/CPU_pin_out_and_signal_description
-        // CLK : 21.47727 MHz (NTSC) or 26.6017 MHz (PAL) clock input.
-        // Internally, this clock is divided by 12 (NTSC 2A03) or 16 (PAL 2A07) to feed the 6502's clock input φ0, which is in turn inverted to form φ1, which is then inverted to form φ2.
-        // φ1 is high during the first phase (half-cycle) of each CPU cycle, while φ2 is high during the second phase.
-        // M2 : Can be considered as a "signals ready" pin. It is a modified version the 6502's φ2 (which roughly corresponds to the CPU input clock φ0) that allows for slower ROMs. CPU cycles begin at the point where M2 goes low.
-        // In the NTSC 2A03, M2 has a duty cycle of 5/8th, or 350ns/559ns. Equivalently, a CPU read (which happens during the second, high phase of M2) takes 1 and 7/8th PPU cycles. The internal φ2 duty cycle is exactly 1/2 (one half).
-        // In the PAL 2A07, the duty cycle is not known, but suspected to be 19/32.
-
-        // http://nesdev.com/2A03%20technical%20reference.txt
-        // PHI2: this output is the divide-by-12 result of the CLK signal (1.79 MHz).
-        // The internal 6502 along with function generating hardware, is clocked off
-        // this frequency, and is available externally here so that it can be used as a
-        // data bus enable signal (when at logic level 1) for external 6502 address
-        // decoder logic. The signal has a 62.5% duty cycle.
-
-        // /$4017R: goes active (zero) when A0-A15 = $4017, R/W = 0, and PHI2 = 1. This
-        // informs an external 3-state inverter to throw controller port data onto the
-        // D0-D7 lines.
-        //
-        // /$4016R: goes active (zero) when A0-A15 = $4016, R/W = 0, and PHI2 = 1.
-        //
-        // $4016W.0, $4016W.1, $4016W.2: these signals represent the real-time status
-        // of a 3 bit writable register located at $4016 in the 6502 memory map. In
-        // NES/FC consoles, $4016W.0 is used as a strobe line for the CMOS 4021 shift
-        // register used inside NES/FC controllers.
+        while (SDL_PollEvent(&e)) switch (e.type)
+        {
+            case SDL_QUIT: quit = true; break;
+        }
 
         bool verboseNMI = true;
         bool verboseIRQ = true;
 
-        const size_t MASTER_CLOCK_CYCLES_PER_FRAME = 21477270 / 60;
-
-//        1789772,5
-//        1.7897725 Mhz
-//        357954,5
-        //printf("PAL@60Hz, master clock cycles per frame: %zu\n", MASTER_CLOCK_CYCLES_PER_FRAME);
-        //for (size_t i = 0; i < MASTER_CLOCK_CYCLES_PER_FRAME; i++, cycles++)
-        const size_t TOTAL_CYCLES = 29781 * 12;
         const size_t CYCLES_PER_ITERATION = 2;
         const bool SUBPIXEL_ITERATIONS = (CYCLES_PER_ITERATION < 4);
-        for (size_t i = 0; i < TOTAL_CYCLES; i += CYCLES_PER_ITERATION)
+        for (size_t i = 0; i < MASTER_CLOCK_CYCLES_PER_FRAME; i += CYCLES_PER_ITERATION, cycles += CYCLES_PER_ITERATION)
         {
-            cycles = i;
             bool cpuClkPosEdge = (cycles % 12 == 0);
             bool ppuClkPosEdge = (cycles % 4 == 0);
             bool ppuClkNegEdge = SUBPIXEL_ITERATIONS ? (cycles % 2 == 0): ppuClkPosEdge;
@@ -222,8 +222,8 @@ int main(int argc, char** argv)
             if (ppuClkNegEdge)
                 ppuPins.ale = false;
 
-            if (cpuPins.nmi && verboseNMI) { printf("NMI @ t: %zu\n", cycles); verboseNMI = false; }
-            if (cpuPins.irq && verboseIRQ) { printf("IRQ @ t: %zu\n", cycles); verboseIRQ = false; }
+            if (cpuPins.nmi && verboseNMI) { printf("NMI @ cpu: %zu, dot: (%zu,%zu)\n", cycles/12, i/(341*4), (i%(341*4))/4); verboseNMI = false; }
+            if (cpuPins.irq && verboseIRQ) { printf("IRQ @ cpu: %zu, dot: (%zu,%zu)\n", cycles/12, i/(341*4), (i%(341*4))/4); verboseIRQ = false; }
         }
         SDL_RenderClear(renderer);
         SDL_UpdateTexture(canvas, NULL, ppu_pixels(), WIDTH * sizeof(u32));
