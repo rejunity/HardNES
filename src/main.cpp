@@ -10,17 +10,7 @@ void logNull(...) {}
 #define LOG logNull
 //#define LOG printf
 
-/* Get CIRAM address according to mirroring */
-PPU::Mirroring ciRamMirroring;
-u16 nt_mirror(u16 addr)
-{
-    switch (ciRamMirroring)
-    {
-        case PPU::VERTICAL:     return addr % 0x800;
-        case PPU::HORIZONTAL:   return ((addr / 2) & 0x400) + (addr % 0x400);
-        default:                return addr - 0x2000;
-    }
-}
+u16 ciram_mirror(Mirroring ciRamMirroring, u16 addr);
 
 // Super Mario Bros. PRG
 // 8000 78           SEI
@@ -43,7 +33,6 @@ int main(int argc, char** argv)
     else
         cartridge_empty(&cart);
 
-    ciRamMirroring  = cart.ciRamMirroring;
     uint8_t* prg    = cart.prg;
     uint8_t* prgRam = cart.prgRam;
     uint8_t* chr    = cart.chr;
@@ -180,18 +169,18 @@ int main(int argc, char** argv)
             // NOTE: SRAM U1 OE is shorted to ground
             if (m2 && cpuPins.rw) switch (cpuPins.a) // read
             {
-                case 0x0000 ... 0x1FFF:  cpuPins.d = ram[cpuPins.a & 0x7FF];     break; // RAM
-                case 0x2000 ... 0x3FFF:  cpuPins.d = ppuPins.d;                  break; // PPU
-                case 0x6000 ... 0x7FFF:  cpuPins.d = prgRam[cpuPins.a & 0x1FFF]; break; // NROM-256 cartridge
-                case 0x8000 ... 0xFFFF:  cpuPins.d = prg[cpuPins.a & 0x7FFF];    break; // NROM-256 cartridge
+                case 0x0000 ... 0x1FFF:  cpuPins.d = ram[cpuPins.a & 0x7FF];        break; // RAM
+                case 0x2000 ... 0x3FFF:  cpuPins.d = ppuPins.d;                     break; // PPU
+                case 0x6000 ... 0x7FFF:  cpuPins.d = prgRam[cpuPins.a & 0x1FFF];    break; // NROM-256 cartridge
+                case 0x8000 ... 0xFFFF:  cpuPins.d = prg[cpuPins.a & 0x7FFF];       break; // NROM-256 cartridge
             }
             if (!cpuPins.rw) switch (cpuPins.a) // write
             {
-                case            0x4014:  dma_request(&dma, cpuPins.d, 256);      break; // OAM DMA
-                case 0x0000 ... 0x1FFF:  ram[cpuPins.a & 0x7FF]     = cpuPins.d; break; // RAM
-                case 0x2000 ... 0x3FFF:  ppuPins.d                  = cpuPins.d; break; // PPU
-                case 0x6000 ... 0x7FFF:  prgRam[cpuPins.a & 0x1FFF] = cpuPins.d; break; // RAM on cartridge
-                //case 0x8000 ... 0xFFFF: cpuPins.d &= prg[cpuPins.a & 0x7FFF]; break;  // ROM cartridge bus collision
+                case            0x4014:  dma_request(&dma, cpuPins.d, 256);         break; // OAM DMA
+                case 0x0000 ... 0x1FFF:  ram[cpuPins.a & 0x7FF]     = cpuPins.d;    break; // RAM
+                case 0x2000 ... 0x3FFF:  ppuPins.d                  = cpuPins.d;    break; // PPU
+                case 0x6000 ... 0x7FFF:  prgRam[cpuPins.a & 0x1FFF] = cpuPins.d;    break; // RAM on cartridge
+                //case 0x8000 ... 0xFFFF: cpuPins.d &= prg[cpuPins.a & 0x7FFF];     break; // ROM cartridge bus collision
             }
 
             // 74LS373 address latch
@@ -201,22 +190,24 @@ int main(int argc, char** argv)
             // @TODO: nametable address swizzling (aka mirroring) should be done here
             u16 ppuAddr = ((ppuPins.pa & 0x3F) << 8) + (ppuAddressLatch & 0xFF);
 
-            // @TODO: find/measure precise ALE/RD/WR subpixel timing
+            // @TODO: find/measure precise ALE/RD/WR subpixel timing from a real PPU
             // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
             // NOTE: (ALE) is high for one half pixel, or 94ns
             bool ppuRD = ((SUBPIXEL_ITERATIONS) ? !ppuPins.ale: true) && ppuPins.rd;
             bool ppuWR = ((SUBPIXEL_ITERATIONS) ? !ppuPins.ale: true) && ppuPins.wr;
 
+            #define CIRAM_ADDR(a) ciram_mirror(cart.ciRamMirroring, a)
             if (ppuRD) switch (ppuAddr) // read
             {
-                case 0x0000 ... 0x1FFF: ppuPins.ad = chr[ppuAddr];              break; // CHR-ROM/RAM
-                case 0x2000 ... 0x3EFF: ppuPins.ad = ciRam[nt_mirror(ppuAddr)]; break; // CIRAM nametables
+                case 0x0000 ... 0x1FFF: ppuPins.ad = chr[ppuAddr];                  break; // CHR-ROM/RAM
+                case 0x2000 ... 0x3EFF: ppuPins.ad = ciRam[CIRAM_ADDR(ppuAddr)];    break; // CIRAM nametables
             }
             if (ppuWR) switch (ppuAddr) // write
             {
-                case 0x0000 ... 0x1FFF: chr[ppuAddr]              = ppuPins.ad; break; // CHR-ROM/RAM
-                case 0x2000 ... 0x3EFF: ciRam[nt_mirror(ppuAddr)] = ppuPins.ad; break; // CIRAM nametables
+                case 0x0000 ... 0x1FFF: chr[ppuAddr]                = ppuPins.ad;   break; // CHR-ROM/RAM
+                case 0x2000 ... 0x3EFF: ciRam[CIRAM_ADDR(ppuAddr)]  = ppuPins.ad;   break; // CIRAM nametables
             }
+            #undef CIRAM_ADDR
 
             // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
             if (ppuClkNegEdge)
@@ -252,4 +243,16 @@ int main(int argc, char** argv)
            m6502_a(&cpu), m6502_x(&cpu), m6502_y(&cpu), m6502_s(&cpu), m6502_p(&cpu), m6502_pc(&cpu));
 
     return 0;
+}
+
+// Get CIRAM address according to mirroring
+u16 ciram_mirror(Mirroring ciRamMirroring, u16 addr)
+{
+    // @TODO: implement as a more readable bit swizzling
+    switch (ciRamMirroring)
+    {
+        case VERTICAL:      return addr % 0x800;
+        case HORIZONTAL:    return ((addr / 2) & 0x400) + (addr % 0x400);
+        default:            return addr % 0x2000;
+    }
 }

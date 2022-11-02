@@ -2,13 +2,14 @@
 #include <cstdint>
 #pragma once
 
+enum Mirroring { VERTICAL, HORIZONTAL };
 struct cartridge_t
 {
     uint8_t* rom;
     uint8_t* prg;
     uint8_t* prgRam;
     uint8_t* chr;
-    PPU::Mirroring ciRamMirroring;
+    Mirroring ciRamMirroring;
     bool hasChrRam;
 };
 

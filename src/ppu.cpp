@@ -423,7 +423,7 @@ ppu_pins_t ppu_tick(ppu_t* ppu, ppu_pins_t pins)
     pins.irq = PPU::nmi;
     pins.video = PPU::video;
 
-    // @TODO: find out when RD and WR signals go high
+    // @TODO: find/measure precise ALE/RD/WR subpixel timing from a real PPU
     // @HACK: meanwhile use !ALE when accessing the memory
     if (PPU::busRead)
     {

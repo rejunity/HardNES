@@ -50,7 +50,6 @@ struct ppu_pins_t
 namespace PPU {
 
 enum Scanline  { VISIBLE, POST, NMI, PRE };
-enum Mirroring { VERTICAL, HORIZONTAL };
 
 /* Sprite buffer */
 struct Sprite

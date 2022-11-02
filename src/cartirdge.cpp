@@ -41,7 +41,7 @@ void cartridge_load(cartridge_t* cart, const char* fileName)
     printf("ROM PRG: %lu, CHR: %lu, mapper: %d, mirroring: %s\n", prgSize, chrSize, mapperType, mirroring ? "|" : "--");
     printf("RAM PRG: %lu, CHR: %lu\n", prgRamSize, (hasChrRam) ? chrSize : 0LU);
 
-    cart->ciRamMirroring = mirroring ? PPU::VERTICAL : PPU::HORIZONTAL;
+    cart->ciRamMirroring = mirroring ? VERTICAL : HORIZONTAL;
 
     if (mapperType != 0)
     {
