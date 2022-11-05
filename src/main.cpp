@@ -4,11 +4,174 @@
 #include "dma.hpp"
 #include "ppu.hpp"
 #include "cartridge.hpp"
-#include <cassert>
+#include <assert.h>
+#include <stdio.h>
+#include <time.h>
 
 void logNull(...) {}
 #define LOG logNull
 //#define LOG printf
+
+u16 ciram_mirror(Mirroring ciRamMirroring, u16 addr);
+
+// @TODO: extract into separate file
+typedef FILE vcd_t;
+vcd_t* vcd_open(const char* fileName, char id = 'A')
+{
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    char s[64];
+    strftime(s, sizeof(s), "%c", tm);
+
+    printf("Dump VCD: %s!\n", fileName);
+    FILE* f = fopen(fileName, "w+");
+
+    fprintf(f,  "$version\n\tHardNES VCD dump\n$end\n"
+                "$date\n\t%s\n$end\n", s);
+    fprintf(f,  "$timescale 47ns $end\n"); // @TODO: calculate based on MASTER_CLOCK_CYCLES_PER_FRAME
+
+    // union cpu_pins_t
+    //         unsigned a : 16;
+    //         unsigned d : 8;
+    //         unsigned rw : 1;
+    //         unsigned sync : 1;
+    //         unsigned irq : 1;
+    //         unsigned nmi : 1;
+    //         unsigned rdy : 1;
+    //         unsigned dummy : 1;
+    //         unsigned rst : 1;
+
+    fprintf(f,  "$scope module TOP $end\n"
+                "$scope module CPU $end\n"
+                "$var wire 16 %c addr $end\n"
+                "$var wire  8 %c data $end\n"
+                "$var wire  1 %c rw $end\n"
+                "$var wire  1 %c sync $end\n"
+                "$var wire  1 %c irq $end\n"
+                "$var wire  1 %c nmi $end\n"
+                "$var wire  1 %c rdy $end\n"
+                "$var wire  1 %c rst $end\n"
+                "$upscope $end\n",
+                id  , id+1, id+2, id+3,
+                id+4, id+5, id+6, id+7);
+
+    // struct ppu_pins_t
+    //     unsigned rw : 1;
+    //     unsigned d : 8;
+    //     unsigned a : 3;
+    //     unsigned cs : 1; // aka DataBusEnable (DBE) in Famicom circuit diagram
+    //     unsigned ext : 4;
+    //     unsigned irq : 1;
+    //     unsigned ale : 1;
+    //     unsigned ad : 8;
+    //     unsigned pa : 6;
+    //     unsigned rd : 1;
+    //     unsigned wr : 1;
+    //     unsigned rst : 1;
+    //     u32 video;
+
+    fprintf(f,  "$scope module PPU $end\n"
+                "$var wire  1 %c rw $end\n"
+                "$var wire  8 %c data $end\n"
+                "$var wire  3 %c reg $end\n"
+                "$var wire  1 %c cs $end\n"
+                "$var wire  1 %c irq $end\n"
+                "$var wire  1 %c ale $end\n"
+                "$var wire  8 %c ppu_addr_data $end\n"
+                "$var wire  6 %c ppu_addr $end\n"
+                "$var wire  1 %c rd $end\n"
+                "$var wire  1 %c wr $end\n"
+                "$var wire  1 %c rst $end\n"
+                "$upscope $end\n"
+                "$upscope $end\n",
+                id+8, id+9, id+10, id+11,
+                id+12, id+13, id+14, id+15,
+                id+16, id+17, id+18);
+
+    fprintf(f,  "$enddefinitions $end\n");
+
+    return f;
+}
+
+const char *BIT4[16] = {
+    [ 0] = "0000", [ 1] = "0001", [ 2] = "0010", [ 3] = "0011",
+    [ 4] = "0100", [ 5] = "0101", [ 6] = "0110", [ 7] = "0111",
+    [ 8] = "1000", [ 9] = "1001", [10] = "1010", [11] = "1011",
+    [12] = "1100", [13] = "1101", [14] = "1110", [15] = "1111",
+};
+const char *BIT3[8] = {
+    [ 0] = "000", [ 1] = "001", [ 2] = "010", [ 3] = "011",
+    [ 4] = "100", [ 5] = "101", [ 6] = "110", [ 7] = "111",
+};
+const char *BIT2[4] = {
+    [ 0] = "00", [ 1] = "01", [ 2] = "10", [ 3] = "11",
+};
+const char  BIT1[2] = {
+    [ 0] = '0', [ 1] = '1'
+};
+
+void vcd_dump(vcd_t* f, size_t cycle, cpu_pins_t cpuPins, ppu_pins_t ppuPins, char id = 'A')
+{
+    fprintf(f,  "#%zu\n", cycle);
+    // union cpu_pins_t
+    //         unsigned a : 16;
+    //         unsigned d : 8;
+    //         unsigned rw : 1;
+    //         unsigned sync : 1;
+    //         unsigned irq : 1;
+    //         unsigned nmi : 1;
+    //         unsigned rdy : 1;
+    //         unsigned dummy : 1;
+    //         unsigned rst : 1;
+
+    fprintf(f,  "b%s%s%s%s %c\n",   BIT4[(cpuPins.a >> 12) & 0xF],
+                                    BIT4[(cpuPins.a >>  8) & 0xF],
+                                    BIT4[(cpuPins.a >>  4) & 0xF],
+                                    BIT4[(cpuPins.a      ) & 0xF], id++);   // 1
+    fprintf(f,  "b%s%s %c\n",       BIT4[(cpuPins.d >>  4) & 0xF],
+                                    BIT4[(cpuPins.d      ) & 0xF], id++);   // 2
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.rw            ], id++);   // 3
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.sync          ], id++);   // 4
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.irq           ], id++);   // 5
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.nmi           ], id++);   // 6
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.rdy           ], id++);   // 7
+    fprintf(f,  "%c%c\n",          BIT1[ cpuPins.rst           ], id++);   // 8
+
+    // struct ppu_pins_t
+    //     unsigned rw : 1;
+    //     unsigned d : 8;
+    //     unsigned a : 3;
+    //     unsigned cs : 1; // aka DataBusEnable (DBE) in Famicom circuit diagram
+    //     unsigned ext : 4;
+    //     unsigned irq : 1;
+    //     unsigned ale : 1;
+    //     unsigned ad : 8;
+    //     unsigned pa : 6;
+    //     unsigned rd : 1;
+    //     unsigned wr : 1;
+    //     unsigned rst : 1;
+    //     u32 video;
+
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.rw            ], id++);   // 1
+    fprintf(f,  "b%s%s %c\n",       BIT4[(ppuPins.d >>  4) & 0xF],
+                                    BIT4[(ppuPins.d      ) & 0xF], id++);   // 2
+    fprintf(f,  "b%s %c\n",         BIT3[ ppuPins.a             ], id++);   // 3
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.cs            ], id++);   // 4
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.irq           ], id++);   // 5
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.ale           ], id++);   // 6
+    fprintf(f,  "b%s%s %c\n",       BIT4[(ppuPins.ad >> 4) & 0xF],
+                                    BIT4[(ppuPins.ad     ) & 0xF], id++);   // 7
+    fprintf(f,  "b%s%s %c\n",       BIT2[(ppuPins.pa >> 4) & 0x3],
+                                    BIT4[(ppuPins.pa     ) & 0xF], id++);   // 8
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.rd            ], id++);   // 9
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.wr            ], id++);   // 10
+    fprintf(f,  "%c%c\n",          BIT1[ ppuPins.rst           ], id++);   // 11
+}
+
+void vcd_close(vcd_t* f)
+{
+    fclose(f);
+}
 
 u16 ciram_mirror(Mirroring ciRamMirroring, u16 addr);
 
@@ -26,6 +189,7 @@ u16 ciram_mirror(Mirroring ciRamMirroring, u16 addr);
 int main(int argc, char** argv)
 {
     printf("Hello, NES!\n");
+    FILE* vcd = vcd_open("mario.vcd");
 
     cartridge_t cart;
     if (argc > 1)
@@ -116,7 +280,7 @@ int main(int argc, char** argv)
     const size_t FRAMES_PER_SECOND = 60;                    // 60 fps (almost NSTC)
     const size_t MASTER_CLOCK_CYCLES_PER_FRAME = MASTER_CLOCK_CYCLES_PER_SECOND / FRAMES_PER_SECOND;
 #else
-    const size_t MASTER_CLOCK_CYCLES_PER_FRAME = 29780.5 * 12; // 341 dots * 262 lines @ 60fps
+    const size_t MASTER_CLOCK_CYCLES_PER_FRAME = 29780.5 * 12; // 341 dots * 262 lines @ 60fps (21.441960 MHz)
 #endif
     printf("NTSC@60Hz, master clock cycles per frame: %zu\n", MASTER_CLOCK_CYCLES_PER_FRAME);
 
@@ -210,12 +374,16 @@ int main(int argc, char** argv)
             }
             #undef CIRAM_ADDR
 
-            // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
-            if (ppuClkNegEdge)
-                ppuPins.ale = false;
+            // @TODO: make configurable through command arguments
+            if (cycles >= MASTER_CLOCK_CYCLES_PER_FRAME*60 && cycles < MASTER_CLOCK_CYCLES_PER_FRAME*61)
+                vcd_dump(vcd, cycles, cpuPins, ppuPins);
 
             if (cpuPins.nmi && verboseNMI) { printf("NMI @ cpu: %zu, dot: (%zu,%zu)\n", cycles/12, i/(341*4), (i%(341*4))/4); verboseNMI = false; }
             if (cpuPins.irq && verboseIRQ) { printf("IRQ @ cpu: %zu, dot: (%zu,%zu)\n", cycles/12, i/(341*4), (i%(341*4))/4); verboseIRQ = false; }
+
+            // @TODO: move ALE/RD/WR subpixel logic into ppu_tick()
+            if (ppuClkNegEdge)
+                ppuPins.ale = false;
         }
         SDL_RenderClear(renderer);
         SDL_UpdateTexture(canvas, NULL, ppu_pixels(), WIDTH * sizeof(u32));
@@ -235,6 +403,8 @@ int main(int argc, char** argv)
 
     SDL_DestroyWindow(window);
     SDL_Quit();
+
+    vcd_close(vcd);
 
     free(ram);
     free(ciRam);
